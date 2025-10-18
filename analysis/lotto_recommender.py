@@ -176,13 +176,28 @@ class LottoRecommender:
         
         return recommendations
     
-    def calculate_filter_impact(self, sample_size=10000):
+    def calculate_filter_impact(self, sample_size=10000, include_numbers=None):
         """필터 영향도 계산 (시뮬레이션)"""
         passed = 0
-        
+
+        if include_numbers:
+            include_numbers = [int(n) for n in include_numbers if 1 <= int(n) <= 45]
+            include_numbers = sorted(set(include_numbers))
+            if len(include_numbers) > 6:
+                raise ValueError("포함 번호는 최대 6개까지 가능합니다.")
+        else:
+            include_numbers = []
+
         for _ in range(sample_size):
-            numbers = random.sample(range(1, 46), 6)
-            if self.apply_filters(numbers):
+            if include_numbers:
+                remaining_count = 6 - len(include_numbers)
+                available_numbers = [n for n in range(1, 46) if n not in include_numbers]
+                sampled = random.sample(available_numbers, remaining_count)
+                numbers = sorted(include_numbers + sampled)
+            else:
+                numbers = random.sample(range(1, 46), 6)
+
+            if self.apply_filters(numbers, include_numbers):
                 passed += 1
         
         pass_rate = passed / sample_size * 100
