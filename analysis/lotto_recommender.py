@@ -24,9 +24,10 @@ class LottoRecommender:
             'remove_all_even': False,
             'remove_all_odd': False,
             'remove_range_cluster': False,
-            'remove_high_40s': False,
             'balance_odd_even': False,
-            'exclude_recent_10': False
+            'exclude_recent_10': False,
+            'max_same_prefix': 6,
+            'max_40s': 6,
         }
     
     def load_data(self):
@@ -87,10 +88,30 @@ class LottoRecommender:
         """구간 집중 체크 (범위가 10 미만)"""
         return (max(numbers) - min(numbers)) < 10
     
-    def has_high_40s(self, numbers):
-        """40대 번호 몰림 체크 (5개 이상)"""
+    def has_high_40s(self, numbers, threshold=5):
+        """40대 번호 몰림 체크"""
         count_40s = sum(1 for n in numbers if 40 <= n <= 45)
-        return count_40s >= 5
+        return count_40s >= threshold
+
+    def exceeds_prefix_limits(self, numbers):
+        """앞자리(10단위) 제한 체크"""
+        prefix_counts = {}
+        for n in numbers:
+            prefix = n // 10
+            prefix_counts[prefix] = prefix_counts.get(prefix, 0) + 1
+
+        max_same_prefix = self.filters.get('max_same_prefix', 6)
+        max_40s = self.filters.get('max_40s', 6)
+
+        for prefix, count in prefix_counts.items():
+            if prefix == 4:
+                if count > max_40s:
+                    return True
+            else:
+                if count > max_same_prefix:
+                    return True
+
+        return False
     
     def check_odd_even_balance(self, numbers):
         """홀짝 밸런스 체크 (2:4 ~ 4:2)"""
@@ -119,16 +140,17 @@ class LottoRecommender:
             if self.is_all_odd(numbers):
                 return False
         
-        # D. 구간 집중 제거
+        # D. 구간 집중 제거 (40번대 몰림 포함)
         if self.filters['remove_range_cluster']:
-            if self.is_range_clustered(numbers):
+            if self.is_range_clustered(numbers) or self.has_high_40s(numbers, threshold=4):
                 return False
-        
-        # E. 40대 몰림 제거
-        if self.filters['remove_high_40s']:
-            if self.has_high_40s(numbers):
+
+        # E. 앞자리 제한
+        if (self.filters.get('max_same_prefix', 6) < 6 or
+                self.filters.get('max_40s', 6) < 6):
+            if self.exceeds_prefix_limits(numbers):
                 return False
-        
+
         # F. 홀짝 밸런스
         if self.filters['balance_odd_even']:
             if not self.check_odd_even_balance(numbers):
@@ -218,16 +240,21 @@ class LottoRecommender:
             'remove_consecutive': f'연속번호 제거 ({self.filters["consecutive_level"]}개 이상)',
             'remove_all_even': '전부 짝수 제거',
             'remove_all_odd': '전부 홀수 제거',
-            'remove_range_cluster': '구간 집중 제거',
-            'remove_high_40s': '40대 몰림 제거',
+            'remove_range_cluster': '구간 집중/40번대 몰림 제거',
             'balance_odd_even': '홀짝 밸런스 (2:4~4:2)',
             'exclude_recent_10': '최근 10회 번호 제외'
         }
-        
+
         for key, name in filter_names.items():
             if self.filters.get(key, False):
                 active.append(name)
-        
+
+        if self.filters.get('max_same_prefix', 6) < 6:
+            active.append(f"앞자리 중복 제한 (최대 {self.filters['max_same_prefix']}개)")
+
+        if self.filters.get('max_40s', 6) < 6:
+            active.append(f"40번대 제한 (최대 {self.filters['max_40s']}개)")
+
         return active
 
 
