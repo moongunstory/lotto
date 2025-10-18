@@ -17,12 +17,15 @@ from fetch.lotto_fetcher import LottoFetcher
 from analysis.lotto_pattern_analyzer import LottoPatternAnalyzer
 from analysis.lotto_recommender import LottoRecommender
 from analysis.lotto_visualizer import LottoVisualizer
-
+from analysis.lotto_feature_engineer import LottoFeatureEngineer
+from analysis.lotto_number_predictor import LottoNumberPredictor
+from analysis.lotto_combo_predictor import LottoComboPredictor
+from analysis.lotto_ml_visualizer import LottoMLVisualizer
 
 # 페이지 설정
 st.set_page_config(
-    page_title="🎯 로또 VIP 분석 프로그램",
-    page_icon="🎲",
+    page_title="🎯 로또 VIP AI 분석 프로그램",
+    page_icon="🤖",
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -34,8 +37,17 @@ st.markdown("""
         font-size: 3rem;
         font-weight: bold;
         text-align: center;
-        color: #4A90E2;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
         margin-bottom: 2rem;
+    }
+    .ai-box {
+        background: linear-gradient(135deg, #667eea22 0%, #764ba222 100%);
+        padding: 1.5rem;
+        border-radius: 10px;
+        border-left: 5px solid #667eea;
+        margin: 1rem 0;
     }
     .sub-header {
         font-size: 1.5rem;
@@ -85,7 +97,16 @@ if 'data_loaded' not in st.session_state:
     st.session_state.data_loaded = False
 if 'recommendations' not in st.session_state:
     st.session_state.recommendations = []
-
+if 'ml_models_loaded' not in st.session_state:
+    st.session_state.ml_models_loaded = False
+if 'number_predictor' not in st.session_state:
+    st.session_state.number_predictor = None
+if 'combo_predictor' not in st.session_state:
+    st.session_state.combo_predictor = None
+if 'predicted_probabilities' not in st.session_state:
+    st.session_state.predicted_probabilities = None
+if 'predicted_combos' not in st.session_state:
+    st.session_state.predicted_combos = None
 
 def load_data():
     """데이터 로드 및 초기화"""
@@ -95,10 +116,16 @@ def load_data():
         recommender = LottoRecommender()
         visualizer = LottoVisualizer()
         
+        # 🆕 ML 모듈 초기화
+        engineer = LottoFeatureEngineer()
+        ml_visualizer = LottoMLVisualizer()
+        
         st.session_state.fetcher = fetcher
         st.session_state.analyzer = analyzer
         st.session_state.recommender = recommender
         st.session_state.visualizer = visualizer
+        st.session_state.engineer = engineer
+        st.session_state.ml_visualizer = ml_visualizer
         st.session_state.data_loaded = True
         
         return True
@@ -106,6 +133,41 @@ def load_data():
         st.error(f"❌ 데이터 로드 실패: {e}")
         return False
 
+def load_or_train_ml_models():
+    """ML 모델 로드 또는 학습"""
+    engineer = st.session_state.engineer
+    
+    # 모델 파일 경로
+    number_model_path = Path('models/number_predictor.pkl')
+    combo_model_path = Path('models/combo_predictor.pkl')
+    
+    # 번호 예측 모델
+    if number_model_path.exists():
+        try:
+            st.session_state.number_predictor = LottoNumberPredictor()
+            st.session_state.number_predictor.load_model(str(number_model_path))
+            st.success("✅ 번호 예측 모델 로드 완료")
+        except Exception as e:
+            st.warning(f"⚠️ 모델 로드 실패: {e}")
+            st.session_state.number_predictor = None
+    else:
+        st.info("💡 번호 예측 모델이 없습니다. 학습을 진행해주세요.")
+        st.session_state.number_predictor = None
+    
+    # 조합 예측 모델
+    if combo_model_path.exists():
+        try:
+            st.session_state.combo_predictor = LottoComboPredictor()
+            st.session_state.combo_predictor.load_model(str(combo_model_path))
+            st.success("✅ 조합 예측 모델 로드 완료")
+        except Exception as e:
+            st.warning(f"⚠️ 모델 로드 실패: {e}")
+            st.session_state.combo_predictor = None
+    else:
+        st.info("💡 조합 예측 모델이 없습니다. 학습을 진행해주세요.")
+        st.session_state.combo_predictor = None
+    
+    st.session_state.ml_models_loaded = True
 
 def main():
     """메인 함수"""
@@ -116,12 +178,12 @@ def main():
     
     # 사이드바
     with st.sidebar:
-        st.image("https://via.placeholder.com/300x100/4A90E2/FFFFFF?text=LOTTO+VIP", use_container_width=True)
+        st.image("https://via.placeholder.com/300x100/667eea/FFFFFF?text=LOTTO+AI", use_container_width=True)
         st.markdown("### 📊 메뉴")
         
         tab_selection = st.radio(
             "기능 선택",
-            ["🏠 홈", "📥 데이터 수집", "📊 패턴 분석", "🎲 번호 추천", "💰 투자 시뮬레이션"],
+            ["🏠 홈", "📥 데이터 수집", "📊 패턴 분석", "🤖 AI 번호 확률", "🎯 AI 조합 예측", "🎲 룰 기반 추천", "💰 투자 시뮬레이션"],
             label_visibility="collapsed"
         )
         
@@ -142,17 +204,20 @@ def main():
         show_data_collection()
     elif tab_selection == "📊 패턴 분석":
         show_pattern_analysis()
-    elif tab_selection == "🎲 번호 추천":
+    elif tab_selection == "🤖 AI 번호 확률":
+        show_ai_number_prediction()
+    elif tab_selection == "🎯 AI 조합 예측":
+        show_ai_combo_prediction()
+    elif tab_selection == "🎲 룰 기반 추천":
         show_number_recommendation()
     elif tab_selection == "💰 투자 시뮬레이션":
         show_investment_simulation()
-
 
 def show_home():
     """홈 화면"""
     st.markdown('<div class="sub-header">🏠 환영합니다!</div>', unsafe_allow_html=True)
     
-    col1, col2, col3 = st.columns(3)
+    col1, col2, col3, col4 = st.columns(4)
     
     with col1:
         st.markdown('<div class="info-box">', unsafe_allow_html=True)
@@ -165,8 +230,14 @@ def show_home():
         st.markdown("### 📊 패턴 분석")
         st.markdown("출현 빈도, 홀짝 비율, 구간 분포 등 다양한 통계를 시각화합니다.")
         st.markdown('</div>', unsafe_allow_html=True)
-    
+
     with col3:
+        st.markdown('<div class="ai-box">', unsafe_allow_html=True)
+        st.markdown("### 🤖 AI 예측")
+        st.markdown("머신러닝으로 번호 확률과 최적 조합을 예측합니다.")
+        st.markdown('</div>', unsafe_allow_html=True)
+    
+    with col4:
         st.markdown('<div class="info-box">', unsafe_allow_html=True)
         st.markdown("### 🎲 번호 추천")
         st.markdown("사용자 정의 필터를 적용하여 최적의 번호를 추천합니다.")
@@ -225,6 +296,8 @@ def show_data_collection():
                 try:
                     df = st.session_state.fetcher.update_data()
                     st.session_state.analyzer.load_data()
+                    if 'engineer' in st.session_state:
+                        st.session_state.engineer.load_data()
                     st.success(f"✅ 갱신 완료! 총 {len(df)}개 회차")
                     st.rerun()
                 except Exception as e:
@@ -440,6 +513,256 @@ def show_number_recommendation():
         
         st.markdown('</div>', unsafe_allow_html=True)
 
+
+def show_ai_number_prediction():
+    """AI 번호 확률 예측 탭"""
+    st.markdown('<div class="sub-header">🤖 AI 번호 확률 예측</div>', unsafe_allow_html=True)
+    
+    engineer = st.session_state.engineer
+    ml_visualizer = st.session_state.ml_visualizer
+    
+    # ML 모델 로드 확인
+    if not st.session_state.ml_models_loaded:
+        load_or_train_ml_models()
+    
+    col1, col2 = st.columns([1, 3])
+    
+    with col1:
+        st.markdown('<div class="ai-box">', unsafe_allow_html=True)
+        st.markdown("### ⚙️ 모델 설정")
+        
+        if st.session_state.number_predictor is None:
+            st.warning("⚠️ 모델이 없습니다")
+            
+            if st.button("🔧 모델 학습 시작", use_container_width=True, type="primary"):
+                with st.spinner("🤖 AI 모델을 학습하는 중... (1-2분 소요)"):
+                    try:
+                        latest_draw = engineer.get_latest_draw_number()
+                        train_end = latest_draw - 20
+                        train_start = max(100, train_end - 300)
+                        
+                        predictor = LottoNumberPredictor(model_type='xgboost')
+                        results = predictor.train(
+                            engineer,
+                            start_draw=train_start,
+                            end_draw=train_end,
+                            validation_split=0.2
+                        )
+                        
+                        predictor.save_model('models/number_predictor.pkl')
+                        st.session_state.number_predictor = predictor
+                        
+                        st.success("✅ 학습 완료!")
+                        st.json(results)
+                        st.rerun()
+                        
+                    except Exception as e:
+                        st.error(f"❌ 학습 실패: {e}")
+        else:
+            st.success("✅ 모델 로드됨")
+            
+            top_k = st.slider("표시할 번호 개수", 10, 45, 20)
+            
+            if st.button("🎯 확률 예측", use_container_width=True, type="primary"):
+                with st.spinner("예측 중..."):
+                    try:
+                        probabilities = st.session_state.number_predictor.predict_probabilities(engineer)
+                        st.session_state.predicted_probabilities = probabilities
+                        st.success("✅ 예측 완료!")
+                    except Exception as e:
+                        st.error(f"❌ 예측 실패: {e}")
+            
+            if st.button("🔬 백테스트", use_container_width=True):
+                with st.spinner("백테스트 중... (시간이 걸릴 수 있습니다)"):
+                    try:
+                        results = st.session_state.number_predictor.backtest(engineer, test_draws=20)
+                        st.json(results)
+                    except Exception as e:
+                        st.error(f"❌ 백테스트 실패: {e}")
+        
+        st.markdown('</div>', unsafe_allow_html=True)
+    
+    with col2:
+        if st.session_state.predicted_probabilities:
+            st.markdown('<div class="success-box">', unsafe_allow_html=True)
+            st.markdown("### 📊 예측 결과")
+            
+            probabilities = st.session_state.predicted_probabilities
+            
+            # 상위 번호 표시
+            top_numbers = sorted(probabilities.items(), key=lambda x: x[1], reverse=True)[:top_k]
+            
+            st.markdown("#### 🏆 확률 순위")
+            cols = st.columns(5)
+            for i, (num, prob) in enumerate(top_numbers[:10]):
+                with cols[i % 5]:
+                    medal = ["🥇", "🥈", "🥉"][i] if i < 3 else f"#{i+1}"
+                    st.metric(f"{medal} {num}번", f"{prob*100:.2f}%")
+            
+            # 시각화
+            st.markdown("---")
+            st.markdown("#### 📈 시각화")
+            
+            tab1, tab2, tab3 = st.tabs(["막대그래프", "히트맵", "피처 중요도"])
+            
+            with tab1:
+                fig = ml_visualizer.plot_number_probabilities(probabilities, top_k=top_k)
+                st.pyplot(fig)
+                plt.close()
+            
+            with tab2:
+                fig = ml_visualizer.plot_probability_heatmap(probabilities)
+                st.pyplot(fig)
+                plt.close()
+            
+            with tab3:
+                importance = st.session_state.number_predictor.get_feature_importance(top_k=20)
+                if importance:
+                    fig = ml_visualizer.plot_feature_importance(importance, top_k=20)
+                    st.pyplot(fig)
+                    plt.close()
+                else:
+                    st.info("피처 중요도 정보가 없습니다.")
+            
+            st.markdown('</div>', unsafe_allow_html=True)
+        else:
+            st.info("👈 왼쪽에서 '확률 예측' 버튼을 클릭하세요.")
+
+def show_ai_combo_prediction():
+    """AI 조합 예측 탭"""
+    st.markdown('<div class="sub-header">🎯 AI 조합 예측</div>', unsafe_allow_html=True)
+    
+    engineer = st.session_state.engineer
+    ml_visualizer = st.session_state.ml_visualizer
+    
+    # ML 모델 로드 확인
+    if not st.session_state.ml_models_loaded:
+        load_or_train_ml_models()
+    
+    col1, col2 = st.columns([1, 3])
+    
+    with col1:
+        st.markdown('<div class="ai-box">', unsafe_allow_html=True)
+        st.markdown("### ⚙️ 모델 설정")
+        
+        if st.session_state.combo_predictor is None:
+            st.warning("⚠️ 모델이 없습니다")
+            
+            if st.button("🔧 모델 학습 시작", use_container_width=True, type="primary"):
+                with st.spinner("🤖 AI 모델을 학습하는 중... (2-3분 소요)"):
+                    try:
+                        latest_draw = engineer.get_latest_draw_number()
+                        train_end = latest_draw - 20
+                        train_start = max(100, train_end - 300)
+                        
+                        predictor = LottoComboPredictor(model_type='xgboost')
+                        results = predictor.train(
+                            engineer,
+                            start_draw=train_start,
+                            end_draw=train_end,
+                            negative_samples=5,
+                            validation_split=0.2
+                        )
+                        
+                        predictor.save_model('models/combo_predictor.pkl')
+                        st.session_state.combo_predictor = predictor
+                        
+                        st.success("✅ 학습 완료!")
+                        st.json(results)
+                        st.rerun()
+                        
+                    except Exception as e:
+                        st.error(f"❌ 학습 실패: {e}")
+        else:
+            st.success("✅ 모델 로드됨")
+            
+            n_combos = st.slider("생성할 조합 개수", 5, 20, 10)
+            
+            prediction_mode = st.radio(
+                "예측 모드",
+                ["Smart (상위 번호)", "Balanced", "Random"],
+                help="Smart: 최근 출현 번호 위주\nBalanced: 균형 샘플링\nRandom: 완전 랜덤"
+            )
+            
+            mode_map = {
+                "Smart (상위 번호)": "smart",
+                "Balanced": "balanced",
+                "Random": "random"
+            }
+            
+            if st.button("🎯 조합 예측", use_container_width=True, type="primary"):
+                with st.spinner("예측 중..."):
+                    try:
+                        combos = st.session_state.combo_predictor.predict_top_combos(
+                            engineer,
+                            n=n_combos,
+                            candidate_pool=mode_map[prediction_mode],
+                            pool_size=25
+                        )
+                        st.session_state.predicted_combos = combos
+                        st.success("✅ 예측 완료!")
+                    except Exception as e:
+                        st.error(f"❌ 예측 실패: {e}")
+            
+            if st.button("🔬 백테스트", use_container_width=True):
+                with st.spinner("백테스트 중... (시간이 걸릴 수 있습니다)"):
+                    try:
+                        results = st.session_state.combo_predictor.backtest(engineer, test_draws=10)
+                        
+                        st.json({
+                            'match_counts': results['match_counts'],
+                            'avg_match': results['avg_match']
+                        })
+                    except Exception as e:
+                        st.error(f"❌ 백테스트 실패: {e}")
+        
+        st.markdown('</div>', unsafe_allow_html=True)
+    
+    with col2:
+        if st.session_state.predicted_combos:
+            st.markdown('<div class="success-box">', unsafe_allow_html=True)
+            st.markdown("### 🎯 예측 조합")
+            
+            combos = st.session_state.predicted_combos
+            
+            # 조합 표시
+            for i, (combo, score) in enumerate(combos, 1):
+                medal = ["🥇", "🥈", "🥉"][i-1] if i <= 3 else f"#{i}"
+                
+                st.markdown(
+                    f'<div class="number-display">{medal} [{", ".join(map(str, combo))}] - {score*100:.2f}%</div>',
+                    unsafe_allow_html=True
+                )
+            
+            # 시각화
+            st.markdown("---")
+            st.markdown("#### 📊 신뢰도 분석")
+            
+            fig = ml_visualizer.plot_combo_scores(combos, top_k=len(combos))
+            st.pyplot(fig)
+            plt.close()
+            
+            # 통계
+            st.markdown("---")
+            st.markdown("#### 📈 조합 통계")
+            
+            col_a, col_b, col_c = st.columns(3)
+            
+            with col_a:
+                avg_score = sum(score for _, score in combos) / len(combos)
+                st.metric("평균 신뢰도", f"{avg_score*100:.2f}%")
+            
+            with col_b:
+                best_score = combos[0][1]
+                st.metric("최고 신뢰도", f"{best_score*100:.2f}%")
+            
+            with col_c:
+                score_range = combos[0][1] - combos[-1][1]
+                st.metric("점수 범위", f"{score_range*100:.2f}%")
+            
+            st.markdown('</div>', unsafe_allow_html=True)
+        else:
+            st.info("👈 왼쪽에서 '조합 예측' 버튼을 클릭하세요.")
 
 def show_investment_simulation():
     """투자 시뮬레이션 탭"""

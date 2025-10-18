@@ -13,7 +13,7 @@ from tqdm import tqdm
 class LottoFetcher:
     """로또 데이터 수집 클래스"""
     
-    def __init__(self, data_path='lotto/data/lotto_history.csv'):
+    def __init__(self, data_path='data/lotto_history.csv'):
         self.base_url = "https://www.dhlottery.co.kr/common.do?method=getLottoNumber&drwNo="
         self.data_path = Path(data_path)
         self.data_path.parent.mkdir(parents=True, exist_ok=True)
