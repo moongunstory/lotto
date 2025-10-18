@@ -281,12 +281,42 @@ def show_data_collection():
             st.metric("최신 회차", f"{int(df['draw_no'].max())}회")
             st.metric("데이터 기간", f"{df['date'].min()} ~ {df['date'].max()}")
             st.markdown('</div>', unsafe_allow_html=True)
-            
-            # 최근 10회차 표시
-            st.markdown("### 📋 최근 10회차 데이터")
-            recent_df = df[['draw_no', 'date', 'n1', 'n2', 'n3', 'n4', 'n5', 'n6', 'bonus']].tail(10)
-            st.dataframe(recent_df, use_container_width=True, hide_index=True)
-            
+
+            st.markdown("### 📚 당첨 기록 살펴보기")
+            recent_tab, all_tab = st.tabs(["최근 10회", "전체 기록"])
+
+            columns = {
+                "draw_no": st.column_config.NumberColumn("회차", format="%d"),
+                "date": "추첨일",
+                "n1": "1번",
+                "n2": "2번",
+                "n3": "3번",
+                "n4": "4번",
+                "n5": "5번",
+                "n6": "6번",
+                "bonus": "보너스"
+            }
+
+            with recent_tab:
+                recent_df = df[['draw_no', 'date', 'n1', 'n2', 'n3', 'n4', 'n5', 'n6', 'bonus']].tail(10)
+                st.dataframe(
+                    recent_df,
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config=columns,
+                    height=360
+                )
+
+            with all_tab:
+                full_df = df[['draw_no', 'date', 'n1', 'n2', 'n3', 'n4', 'n5', 'n6', 'bonus']]
+                st.dataframe(
+                    full_df,
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config=columns,
+                    height=480
+                )
+
         except Exception as e:
             st.warning("⚠️ 데이터가 없습니다. 수집을 시작해주세요.")
     
@@ -460,14 +490,6 @@ def show_ai_number_prediction():
                     except Exception as e:
                         st.error(f"❌ 예측 실패: {e}")
             
-            if st.button("🔬 백테스트", use_container_width=True):
-                with st.spinner("백테스트 중... (시간이 걸릴 수 있습니다)"):
-                    try:
-                        results = st.session_state.number_predictor.backtest(engineer, test_draws=20)
-                        st.json(results)
-                    except Exception as e:
-                        st.error(f"❌ 백테스트 실패: {e}")
-        
         st.markdown('</div>', unsafe_allow_html=True)
     
     with col2:
@@ -534,23 +556,79 @@ def show_ai_combo_prediction():
         st.markdown('<div class="info-box">', unsafe_allow_html=True)
         st.markdown("### ⚙️ 룰 기반 필터")
 
-        remove_consecutive = st.checkbox("❌ 연속번호 제거", value=False)
-        if remove_consecutive:
-            consecutive_level = st.radio(
-                "연속번호 기준",
-                [2, 3, 6],
-                format_func=lambda x: f"{x}개 이상 연속" if x < 6 else "완전 연속(1~6)",
-                horizontal=True
-            )
-        else:
-            consecutive_level = 2
+        filter_col_left, filter_col_right = st.columns(2)
 
-        remove_all_even = st.checkbox("❌ 전부 짝수 제거", value=False)
-        remove_all_odd = st.checkbox("❌ 전부 홀수 제거", value=False)
-        remove_range_cluster = st.checkbox("❌ 구간 집중 제거", value=False)
-        remove_high_40s = st.checkbox("❌ 40대 번호 몰림 제거", value=False)
-        balance_odd_even = st.checkbox("✅ 홀짝 밸런스 (2:4~4:2)", value=True)
-        exclude_recent_10 = st.checkbox("❌ 최근 10회 번호 제외", value=False)
+        with filter_col_left:
+            remove_consecutive = st.checkbox(
+                "❌ 연속번호 제거",
+                value=False,
+                help="2개 이상 연속된 번호를 제한합니다."
+            )
+            if remove_consecutive:
+                consecutive_level = st.radio(
+                    "연속번호 기준",
+                    [2, 3, 6],
+                    format_func=lambda x: f"{x}개 이상 연속" if x < 6 else "완전 연속(1~6)",
+                    horizontal=True
+                )
+            else:
+                consecutive_level = 2
+
+            remove_range_cluster = st.checkbox(
+                "❌ 구간 집중 제거 (40번대 포함)",
+                value=False,
+                help="번호 범위가 좁거나 40번대가 과도하게 몰린 조합을 제외합니다."
+            )
+
+            balance_odd_even = st.checkbox(
+                "✅ 홀짝 밸런스 (2:4~4:2)",
+                value=True,
+                help="홀수/짝수 비율을 균형 있게 유지합니다."
+            )
+
+        with filter_col_right:
+            remove_all_even = st.checkbox("❌ 전부 짝수 제거", value=False)
+            remove_all_odd = st.checkbox("❌ 전부 홀수 제거", value=False)
+            exclude_recent_10 = st.checkbox(
+                "❌ 최근 10회 번호 제외",
+                value=False,
+                help="최근 당첨번호가 포함된 조합을 필터링합니다."
+            )
+
+        st.markdown("---")
+        st.markdown("### 🔢 번호 패턴 제한")
+
+        prefix_options = [
+            ("제한 없음", 6),
+            ("최대 4개", 4),
+            ("최대 3개", 3),
+            ("최대 2개", 2),
+        ]
+        prefix_labels = [label for label, _ in prefix_options]
+        prefix_choice = st.radio(
+            "같은 앞자리(0~30번대) 허용 개수",
+            prefix_labels,
+            horizontal=True,
+            index=0
+        )
+        max_same_prefix = dict(prefix_options)[prefix_choice]
+
+        forty_options = [
+            ("제한 없음", 6),
+            ("최대 4개", 4),
+            ("최대 3개", 3),
+            ("최대 2개", 2),
+            ("최대 1개", 1),
+        ]
+        forty_labels = [label for label, _ in forty_options]
+        forty_choice = st.radio(
+            "40번대 허용 개수",
+            forty_labels,
+            horizontal=True
+        )
+        max_40s = dict(forty_options)[forty_choice]
+
+        st.caption("※ 같은 앞자리가 과도하게 몰린 조합을 줄이면 보다 균형 잡힌 패턴을 기대할 수 있습니다.")
 
         st.markdown("---")
         st.markdown("### 🎯 반드시 포함할 번호")
@@ -617,9 +695,10 @@ def show_ai_combo_prediction():
                     remove_all_even=remove_all_even,
                     remove_all_odd=remove_all_odd,
                     remove_range_cluster=remove_range_cluster,
-                    remove_high_40s=remove_high_40s,
                     balance_odd_even=balance_odd_even,
-                    exclude_recent_10=exclude_recent_10
+                    exclude_recent_10=exclude_recent_10,
+                    max_same_prefix=max_same_prefix,
+                    max_40s=max_40s
                 )
 
                 include_numbers = []
@@ -686,18 +765,6 @@ def show_ai_combo_prediction():
 
                     except Exception as e:
                         st.error(f"❌ 예측 실패: {e}")
-
-            if st.button("🔬 백테스트", use_container_width=True):
-                with st.spinner("백테스트 중... (시간이 걸릴 수 있습니다)"):
-                    try:
-                        results = st.session_state.combo_predictor.backtest(engineer, test_draws=10)
-
-                        st.json({
-                            'match_counts': results['match_counts'],
-                            'avg_match': results['avg_match']
-                        })
-                    except Exception as e:
-                        st.error(f"❌ 백테스트 실패: {e}")
 
         st.markdown('</div>', unsafe_allow_html=True)
 
