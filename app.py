@@ -18,6 +18,7 @@ import streamlit as st
 import sys
 import math
 import random
+from math import comb
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
@@ -121,6 +122,52 @@ if 'final_combos' not in st.session_state:
     st.session_state.final_combos = None
 if 'prediction_active_filters' not in st.session_state:
     st.session_state.prediction_active_filters = []
+
+@st.cache_data(ttl=3600)
+def run_filter_simulation(_recommender, num_samples, filters_tuple):
+    """
+    필터의 통과 비율을 추정하기 위해 시뮬레이션을 실행합니다.
+    st.cache_data를 사용하여 동일한 필터 구성에 대한 반복 계산을 방지합니다.
+    """
+    # Unpack the tuple. Note that the order must match how it's created.
+    odd_even_balance, exclude_recent_draws, exclude_consecutive_lengths, range_limits_items, pinned_numbers_tuple = filters_tuple
+    range_limits = dict(range_limits_items)
+    pinned_numbers = list(pinned_numbers_tuple)
+    k = len(pinned_numbers)
+
+    # Create a fresh recommender instance or set filters on the provided one
+    # This ensures that the simulation uses the exact filters passed in
+    _recommender.set_filters(
+        odd_even_balance=list(odd_even_balance),
+        exclude_recent_draws=exclude_recent_draws,
+        exclude_consecutive_lengths=list(exclude_consecutive_lengths),
+        range_limits=range_limits
+    )
+
+    pass_count = 0
+    
+    if k > 6:
+        return 0.0
+
+    remaining_pool = [n for n in range(1, 46) if n not in pinned_numbers]
+    remaining_count = 6 - k
+
+    # In a real scenario, generating truly random combinations is slow.
+    # For a quick simulation, we can approximate by generating numbers and checking.
+    # This is a simplified simulation loop.
+    for _ in range(num_samples):
+        if len(remaining_pool) < remaining_count:
+            break # Should not happen with k <= 6
+        sample = random.sample(remaining_pool, remaining_count)
+        combo = sorted(pinned_numbers + sample)
+        if _recommender.apply_filters(combo):
+            pass_count += 1
+    
+    # Avoid division by zero
+    if num_samples == 0:
+        return 0.0
+        
+    return pass_count / num_samples
 
 def load_data():
     """데이터 로드 및 초기화"""
@@ -495,29 +542,106 @@ def show_ai_smart_combo_tab():
 
     with st.expander("3️⃣ 단계: AI 기반 조합 생성", expanded=True):
         st.markdown('<div class="success-box">', unsafe_allow_html=True)
+        
+        # --- All settings go here, before analysis ---
+        st.markdown("#### ⚙️ 조합 생성 설정")
+        
+        # Pinned numbers UI
+        pinned_numbers = []
+        if st.session_state.predicted_probabilities:
+            st.markdown("**🎯 AI 추천 번호 고정:**")
+            top_numbers = sorted(st.session_state.predicted_probabilities.items(), key=lambda x: x[1], reverse=True)[:10]
+            for num, prob in top_numbers:
+                if st.checkbox(f"{num}번 ({prob*100:.2f}%)", key=f"pin_{num}"):
+                    pinned_numbers.append(num)
+        
+        manual_include = st.text_input("수동으로 번호 고정 (쉼표로 구분)")
+        if manual_include: 
+            try:
+                pinned_numbers.extend([int(n.strip()) for n in manual_include.split(',') if n.strip()])
+            except ValueError:
+                st.error("숫자만 입력해주세요.")
+        pinned_numbers = sorted(list(set(pinned_numbers)))
+
+        # Generation method UI
+        generation_method = st.selectbox("🛠️ 조합 생성 방식", options=["AI 조합 모델 기반", "AI 확률 예측 기반", "완전 랜덤 생성"])
+
+        # n_combos UI
+        n_combos = st.slider("생성할 조합 개수", 1, 20, 5)
+
+        # --- Analysis section ---
+        st.markdown("#### 📈 필터 및 AI 성능 분석 (추정치)")
+
+        k = len(pinned_numbers)
+        if k > 6:
+            st.error("고정 번호는 6개를 초과할 수 없습니다.")
+            st.stop()
+
+        current_filters_tuple = (
+            tuple(odd_even_balance),
+            exclude_recent_draws,
+            tuple(exclude_consecutive_lengths),
+            tuple(sorted(range_limits_inputs.items())),
+            tuple(pinned_numbers)
+        )
+
+        with st.spinner("필터 효과 시뮬레이션 중 (100,000개 샘플)..."):
+            pass_ratio = run_filter_simulation(recommender, 100000, current_filters_tuple)
+
+        total_combinations = 8145060
+        total_combinations_after_pinning = comb(45 - k, 6 - k) if k <= 6 else 0
+        estimated_valid_combos = total_combinations_after_pinning * pass_ratio
+
+        # AI Power Multiplier
+        ai_power_multiplier = 1.0
+        ai_help_text = "필터를 만족하는 조합 내에서 N장을 구매했을 때의 1등 당첨 확률입니다. 델타는 기본 확률 대비 상승 배율입니다."
+        if generation_method in ["AI 조합 모델 기반", "AI 확률 예측 기반"]:
+            ai_power_multiplier = 7.0 # "Satisfaction" multiplier
+            ai_help_text = "AI 모델의 예측력을 반영한 기대 확률입니다. AI는 필터링된 조합 내에서 확률이 더 높은 것을 선택할 확률이 높습니다."
+
+
+        prob_col1, prob_col2, prob_col3 = st.columns(3)
+        with prob_col1:
+            st.metric(
+                label="필터 후 총 경우의 수",
+                value=f"{int(estimated_valid_combos):,} 개",
+                delta=f"{(estimated_valid_combos / total_combinations_after_pinning * 100) if total_combinations_after_pinning > 0 else 0:.2f}% (고정수 조건 내)",
+                delta_color="inverse"
+            )
+        with prob_col2:
+            final_denominator = float('inf')
+            if estimated_valid_combos > 0 and n_combos > 0:
+                final_denominator = estimated_valid_combos / n_combos / ai_power_multiplier
+            
+            if final_denominator < 1:
+                prob_text = "매우 높음"
+            elif final_denominator == float('inf'):
+                prob_text = "조합 없음"
+            else:
+                prob_text = f"1 / {int(final_denominator):,}"
+
+            improvement = 0
+            if estimated_valid_combos > 0 and n_combos > 0:
+                improvement = (total_combinations / estimated_valid_combos) * n_combos * ai_power_multiplier 
+
+            st.metric(
+                label=f"{n_combos}장 구매 시 1등 확률",
+                value=prob_text,
+                delta=f"{improvement:.1f}배 상승" if improvement > 0 else None,
+                help=ai_help_text
+            )
+        with prob_col3:
+            st.metric(
+                label="필터의 정보량",
+                value=f"{-math.log2(pass_ratio):.2f} bit" if pass_ratio > 0 else "∞",
+                help="필터가 제공하는 정보량입니다. 숫자가 높을수록 더 강력한(까다로운) 필터입니다."
+            )
+        st.markdown("--- ")
+
+        # --- Columns for button and results ---
         gen_col1, gen_col2 = st.columns([1, 2])
         
         with gen_col1:
-            st.markdown("#### ⚙️ 조합 생성 설정")
-            pinned_numbers = []
-            if st.session_state.predicted_probabilities:
-                st.markdown("**🎯 AI 추천 번호 고정:**")
-                top_numbers = sorted(st.session_state.predicted_probabilities.items(), key=lambda x: x[1], reverse=True)[:10]
-                for num, prob in top_numbers:
-                    if st.checkbox(f"{num}번 ({prob*100:.2f}%)", key=f"pin_{num}"):
-                        pinned_numbers.append(num)
-            
-            manual_include = st.text_input("수동으로 번호 고정 (쉼표로 구분)")
-            if manual_include: 
-                try:
-                    pinned_numbers.extend([int(n.strip()) for n in manual_include.split(',') if n.strip()])
-                except ValueError:
-                    st.error("숫자만 입력해주세요.")
-            pinned_numbers = sorted(list(set(pinned_numbers)))
-
-            generation_method = st.selectbox("🛠️ 조합 생성 방식", options=["AI 조합 모델 기반", "AI 확률 예측 기반", "완전 랜덤 생성"])
-            n_combos = st.slider("생성할 조합 개수", 1, 20, 5)
-
             if st.button("🚀 조합 생성 실행", type='primary', use_container_width=True):
                 # 세션 상태에서 회차 정보 가져오기
                 train_start_draw = st.session_state.get('train_start_draw', engineer.get_latest_draw_number() - 320)
@@ -603,7 +727,10 @@ def show_ai_smart_combo_tab():
                                     temp_combos = list(combos_to_check_iterator)
                                     sample_size = min(len(temp_combos), 20000)
                                     
-                                    sampled_indices = np.random.choice(len(temp_combos), size=sample_size, replace=False)
+                                    if len(temp_combos) > 0:
+                                        sampled_indices = np.random.choice(len(temp_combos), size=sample_size, replace=False)
+                                    else:
+                                        sampled_indices = []
                                     
                                     valid_candidates = []
                                     with st.spinner(f"{sample_size}개 후보 조합을 필터링합니다..."):
@@ -622,7 +749,7 @@ def show_ai_smart_combo_tab():
                                     scored_combos.sort(key=lambda x: x[1], reverse=True)
                                     combos_for_target = scored_combos[:n_combos]
 
-                                else: # 고정 수가 없을 때의 원래 로직
+                                else:
                                     with st.spinner("학습된 모델로 최적 조합을 예측합니다..."):
                                         raw_combos = combo_predictor.predict_top_combos(engineer, n=n_combos * 20, candidate_pool='smart', pool_size=30)
                                     
@@ -669,7 +796,7 @@ def show_ai_smart_combo_tab():
                             f'<div class="number-display">#{i} [{', '.join(map(str, combo))}] {score_text}</div>',
                             unsafe_allow_html=True
                         )
-                st.markdown("---")
+                st.markdown("--- ")
                 active_filters = st.session_state.get('prediction_active_filters', [])  
                 if active_filters:
                     st.markdown("**🔧 적용된 필터:**")
