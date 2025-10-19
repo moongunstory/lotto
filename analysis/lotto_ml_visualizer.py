@@ -16,7 +16,7 @@ import platform
 def set_korean_font():
     """한글 폰트 및 이모지 지원 설정"""
     system = platform.system()
-    
+
     if system == 'Darwin':  # macOS
         plt.rc('font', family='AppleGothic')
     elif system == 'Windows':
@@ -26,8 +26,14 @@ def set_korean_font():
         # Linux 환경에서는 noto-color-emoji 폰트 설치가 필요할 수 있습니다.
         # sudo apt-get install fonts-noto-color-emoji
         plt.rcParams['font.family'] = ['NanumGothic', 'DejaVu Sans', 'Noto Color Emoji']
-    
+
     plt.rcParams['axes.unicode_minus'] = False
+    # 일부 환경(특히 Windows HiDPI)에서는 Matplotlib이 매우 큰 DPI를 사용해
+    # Streamlit에서 이미지를 변환할 때 DecompressionBombError가 발생할 수 있다.
+    # 기본 Figure/Save DPI를 안전한 값으로 제한한다.
+    safe_dpi = 120
+    plt.rcParams['figure.dpi'] = safe_dpi
+    plt.rcParams['savefig.dpi'] = safe_dpi
 
 
 class LottoMLVisualizer:
@@ -35,6 +41,8 @@ class LottoMLVisualizer:
     
     def __init__(self):
         set_korean_font()
+        self.default_dpi = 120
+        self.default_figsize = (14, 7)
         self.colors = {
             'primary': '#4A90E2',
             'secondary': '#7B68EE',
@@ -43,6 +51,12 @@ class LottoMLVisualizer:
             'danger': '#FF6B6B',
             'gradient': ['#667eea', '#764ba2', '#f093fb', '#4facfe']
         }
+
+    def _create_figure(self, figsize):
+        """안전한 DPI가 적용된 Figure 생성"""
+        fig, ax = plt.subplots(figsize=figsize)
+        fig.set_dpi(self.default_dpi)
+        return fig, ax
     
     def plot_number_probabilities(self, probabilities, top_k=20, highlight_numbers=None, save_path=None):
         """
@@ -54,7 +68,7 @@ class LottoMLVisualizer:
             highlight_numbers: 강조할 번호 리스트
             save_path: 저장 경로
         """
-        fig, ax = plt.subplots(figsize=(16, 8), dpi=100)
+        fig, ax = self._create_figure(self.default_figsize)
         
         # 확률 순으로 정렬
         sorted_probs = sorted(probabilities.items(), key=lambda x: x[1], reverse=True)[:top_k]
@@ -103,7 +117,7 @@ class LottoMLVisualizer:
         plt.tight_layout()
         
         if save_path:
-            plt.savefig(save_path, dpi=150, bbox_inches='tight')
+            plt.savefig(save_path, dpi=self.default_dpi, bbox_inches='tight')
         
         return fig
     
@@ -115,7 +129,7 @@ class LottoMLVisualizer:
             probabilities: {번호: 확률} 딕셔너리
             save_path: 저장 경로
         """
-        fig, ax = plt.subplots(figsize=(14, 8))
+        fig, ax = self._create_figure((14, 8))
         
         # 5x9 그리드 생성
         grid = np.zeros((5, 9))
@@ -148,7 +162,7 @@ class LottoMLVisualizer:
         plt.tight_layout()
         
         if save_path:
-            plt.savefig(save_path, dpi=150, bbox_inches='tight')
+            plt.savefig(save_path, dpi=self.default_dpi, bbox_inches='tight')
         
         return fig
     
@@ -161,7 +175,7 @@ class LottoMLVisualizer:
             top_k: 상위 K개만 표시
             save_path: 저장 경로
         """
-        fig, ax = plt.subplots(figsize=(14, 10))
+        fig, ax = self._create_figure((14, 10))
         
         # 상위 K개
         top_combos = combos_with_scores[:top_k]
@@ -197,7 +211,7 @@ class LottoMLVisualizer:
         plt.tight_layout()
         
         if save_path:
-            plt.savefig(save_path, dpi=150, bbox_inches='tight')
+            plt.savefig(save_path, dpi=self.default_dpi, bbox_inches='tight')
         
         return fig
     
@@ -210,7 +224,7 @@ class LottoMLVisualizer:
             top_k: 상위 K개만 표시
             save_path: 저장 경로
         """
-        fig, ax = plt.subplots(figsize=(12, 10))
+        fig, ax = self._create_figure((12, 10))
         
         # 상위 K개
         top_features = feature_importance[:top_k]
@@ -242,7 +256,7 @@ class LottoMLVisualizer:
         plt.tight_layout()
         
         if save_path:
-            plt.savefig(save_path, dpi=150, bbox_inches='tight')
+            plt.savefig(save_path, dpi=self.default_dpi, bbox_inches='tight')
         
         return fig
     
@@ -257,6 +271,7 @@ class LottoMLVisualizer:
         """
         if model_type == 'number':
             fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6))
+            fig.set_dpi(self.default_dpi)
             
             # 상위 K개 선택시 평균 적중 개수
             top_k_perf = backtest_data.get('top_k_performance', {})
@@ -309,7 +324,7 @@ class LottoMLVisualizer:
                        ha='center', va='bottom', fontsize=11, fontweight='bold')
         
         elif model_type == 'combo':
-            fig, ax = plt.subplots(figsize=(12, 6))
+            fig, ax = self._create_figure((12, 6))
             
             # 일치 개수 분포
             match_counts = backtest_data.get('match_counts', {})
@@ -339,7 +354,7 @@ class LottoMLVisualizer:
         plt.tight_layout()
         
         if save_path:
-            plt.savefig(save_path, dpi=150, bbox_inches='tight')
+            plt.savefig(save_path, dpi=self.default_dpi, bbox_inches='tight')
         
         return fig
     
@@ -352,7 +367,7 @@ class LottoMLVisualizer:
             actual_numbers: 실제 당첨번호 리스트
             save_path: 저장 경로
         """
-        fig, ax = plt.subplots(figsize=(14, 6))
+        fig, ax = self._create_figure((14, 6))
         
         # Venn 다이어그램 스타일 표현
         all_numbers = sorted(set(predicted_numbers) | set(actual_numbers))
@@ -408,7 +423,7 @@ class LottoMLVisualizer:
         plt.tight_layout()
         
         if save_path:
-            plt.savefig(save_path, dpi=150, bbox_inches='tight')
+            plt.savefig(save_path, dpi=self.default_dpi, bbox_inches='tight')
         
         return fig
     
@@ -421,7 +436,7 @@ class LottoMLVisualizer:
             history_data: [(회차, 확률), ...] 리스트
             save_path: 저장 경로
         """
-        fig, ax = plt.subplots(figsize=(14, 6))
+        fig, ax = self._create_figure((14, 6))
         
         draws = [d for d, _ in history_data]
         probs = [p * 100 for _, p in history_data]
@@ -443,7 +458,7 @@ class LottoMLVisualizer:
         plt.tight_layout()
         
         if save_path:
-            plt.savefig(save_path, dpi=150, bbox_inches='tight')
+            plt.savefig(save_path, dpi=self.default_dpi, bbox_inches='tight')
         
         return fig
 
@@ -467,17 +482,17 @@ if __name__ == "__main__":
     print("\n📊 테스트 시각화 생성 중...")
     
     fig1 = visualizer.plot_number_probabilities(test_probabilities, top_k=20)
-    plt.savefig('/tmp/test_number_probs.png', dpi=150, bbox_inches='tight')
+    fig1.savefig('/tmp/test_number_probs.png', dpi=visualizer.default_dpi, bbox_inches='tight')
     plt.close()
     print("✅ 번호 확률 그래프 생성")
-    
+
     fig2 = visualizer.plot_combo_scores(test_combos, top_k=5)
-    plt.savefig('/tmp/test_combo_scores.png', dpi=150, bbox_inches='tight')
+    fig2.savefig('/tmp/test_combo_scores.png', dpi=visualizer.default_dpi, bbox_inches='tight')
     plt.close()
     print("✅ 조합 점수 그래프 생성")
-    
+
     fig3 = visualizer.plot_probability_heatmap(test_probabilities)
-    plt.savefig('/tmp/test_heatmap.png', dpi=150, bbox_inches='tight')
+    fig3.savefig('/tmp/test_heatmap.png', dpi=visualizer.default_dpi, bbox_inches='tight')
     plt.close()
     print("✅ 확률 히트맵 생성")
     
