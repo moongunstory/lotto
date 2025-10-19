@@ -86,6 +86,8 @@ class LottoFeatureEngineer:
         appeared_draws = df.index.get_level_values('draw_no').to_series(index=df.index)
         df['last_appeared_draw'] = appeared_draws.where(df['appeared'] == 1)
         df['last_appeared_draw'] = grouped['last_appeared_draw'].ffill()
+        # Shift the result of the ffill() down by one within each group to prevent data leakage.
+        df['last_appeared_draw'] = grouped['last_appeared_draw'].shift(1)
         df['dormant_period'] = (df.index.get_level_values('draw_no') - df['last_appeared_draw']).fillna(999).astype(int)
 
         # 3. 재출현 간격 통계
@@ -132,13 +134,13 @@ class LottoFeatureEngineer:
         if end_draw is None:
             end_draw = int(self.df.index.max())
         
-        print(f"🔪 학습 데이터 슬라이싱: {start_draw}회 ~ {end_draw-1}회")
+        print(f"🔪 학습 데이터 슬라이싱: {start_draw}회 ~ {end_draw}회")
         
         # 1. 피처(X)와 타겟(y) 데이터 슬라이싱
-        # X: start_draw ~ end_draw-1 회차의 피처를 사용
-        # y: start_draw ~ end_draw-1 회차의 출현 여부를 타겟으로 사용
+        # X: start_draw ~ end_draw 회차의 피처를 사용
+        # y: start_draw ~ end_draw 회차의 출현 여부를 타겟으로 사용
         train_indices = (self.features_df.index.get_level_values('draw_no') >= start_draw) & \
-                        (self.features_df.index.get_level_values('draw_no') < end_draw)
+                        (self.features_df.index.get_level_values('draw_no') <= end_draw)
         
         features_slice = self.features_df.loc[train_indices]
         
@@ -200,6 +202,67 @@ class LottoFeatureEngineer:
             features['total_recent_10_freq'] = 0
 
         return features
+
+    def build_combo_training_data(self, start_draw=100, end_draw=None, negative_samples=5):
+        """조합 예측용 학습 데이터셋 생성"""
+        if end_draw is None:
+            end_draw = self.get_latest_draw_number()
+
+        all_features = []
+        all_targets = []
+        all_draws = []
+
+        # Ensure all features are calculated up to the end_draw + 1 for future predictions
+        self.calculate_all_features()
+
+        df_slice = self.df.loc[start_draw:end_draw]
+        
+        print(f"🛠️ 조합 학습 데이터 생성 시작: {start_draw}회~{end_draw}회 ({len(df_slice)}회차)")
+
+        for draw_no, row in df_slice.iterrows():
+            # 1. Positive sample (actual winning combo)
+            winning_combo = [int(row[f'n{i}']) for i in range(1, 7)]
+            try:
+                combo_features = self.extract_combo_features(winning_combo, draw_no)
+            except ValueError:
+                print(f"⚠️ {draw_no}회차 당첨 조합의 피처를 생성할 수 없어 건너뜁니다.")
+                continue
+
+            all_features.append(combo_features)
+            all_targets.append(1) # 1 for winning
+            all_draws.append(draw_no)
+
+            # 2. Negative samples (random combos)
+            existing_combos = {tuple(sorted(winning_combo))}
+            generated_count = 0
+            attempts = 0
+            while generated_count < negative_samples and attempts < 1000:
+                attempts += 1
+                random_combo = sorted(np.random.choice(range(1, 46), size=6, replace=False))
+                if tuple(random_combo) not in existing_combos:
+                    existing_combos.add(tuple(random_combo))
+                    try:
+                        combo_features = self.extract_combo_features(random_combo, draw_no)
+                        all_features.append(combo_features)
+                        all_targets.append(0) # 0 for random
+                        all_draws.append(draw_no)
+                        generated_count += 1
+                    except ValueError:
+                        # This can happen if draw_no is too early for feature calculation
+                        continue
+        
+        if not all_features:
+            print("⚠️ 생성된 학습 데이터가 없습니다. 회차 범위를 확인해주세요.")
+            return pd.DataFrame(), pd.Series(), []
+
+        X = pd.DataFrame(all_features)
+        y = pd.Series(all_targets)
+        
+        # Handle potential missing columns if some features weren't generated
+        X = X.fillna(0)
+
+        print(f"✅ 조합 학습 데이터 생성 완료: {len(X)}개 샘플 ({len(df_slice)}개 당첨, {len(X) - len(df_slice)}개 랜덤)")
+        return X, y, all_draws
 
     def get_latest_draw_number(self):
         """최신 회차 번호 반환"""

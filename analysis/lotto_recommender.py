@@ -38,17 +38,19 @@ class LottoRecommender:
             if key in self.filters:
                 self.filters[key] = value
     
-    def get_recent_numbers(self, recent_draws=10):
-        """최근 N회차 출현 번호 추출"""
+    def _get_recent_combinations(self, recent_draws=10):
+        """최근 N회차 당첨 조합 추출"""
         if recent_draws <= 0:
             return set()
         recent_df = self.df.tail(recent_draws)
-        recent_numbers = set()
-        
-        for col in ['n1', 'n2', 'n3', 'n4', 'n5', 'n6']:
-            recent_numbers.update(recent_df[col].tolist())
-        
-        return recent_numbers
+        recent_combos = set()
+        for index, row in recent_df.iterrows():
+            combo = tuple(sorted([
+                int(row['n1']), int(row['n2']), int(row['n3']),
+                int(row['n4']), int(row['n5']), int(row['n6'])
+            ]))
+            recent_combos.add(combo)
+        return recent_combos
 
     def _check_consecutive_rules(self, numbers):
         """
@@ -124,15 +126,15 @@ class LottoRecommender:
         if include_numbers:
             if not all(n in numbers for n in include_numbers):
                 return False
-
+        
         # 1. 홀짝 밸런스
         if not self._check_odd_even_balance(numbers):
             return False
 
-        # 2. 최근 당첨번호 제외
+        # 2. 최근 당첨조합 제외
         if self.filters['exclude_recent_draws'] > 0:
-            recent_numbers = self.get_recent_numbers(self.filters['exclude_recent_draws'])
-            if any(n in recent_numbers for n in numbers):
+            recent_combos = self._get_recent_combinations(self.filters['exclude_recent_draws'])
+            if tuple(sorted(numbers)) in recent_combos:
                 return False
 
         # 3. 연속 번호 규칙 (신규)
@@ -185,10 +187,10 @@ class LottoRecommender:
         if odd_even_ratios:
             active.append(f"홀짝 밸런스 ({ ', '.join(odd_even_ratios) })")
 
-        # 최근 번호 제외
+        # 최근 조합 제외
         exclude_draws = self.filters.get('exclude_recent_draws', 0)
         if exclude_draws > 0:
-            active.append(f'최근 {exclude_draws}회 번호 제외')
+            active.append(f'최근 {exclude_draws}회 당첨조합 제외')
 
         # 연속 번호
         exclude_consecutive = self.filters.get('exclude_consecutive_lengths', [])

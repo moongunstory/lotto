@@ -69,7 +69,9 @@ class LottoMLVisualizer:
             highlight_numbers: 강조할 번호 리스트
             save_path: 저장 경로
         """
-        fig, ax = self._create_figure(self.default_figsize)
+        # top_k에 따라 동적으로 width 조정
+        dynamic_width = max(10, min(top_k * 0.4, 20))  # 최소 10, 최대 20
+        fig, ax = plt.subplots(figsize=(dynamic_width, 5), dpi=80)
         
         # 확률 순으로 정렬
         sorted_probs = sorted(probabilities.items(), key=lambda x: x[1], reverse=True)[:top_k]
@@ -86,12 +88,12 @@ class LottoMLVisualizer:
         
         # 막대그래프
         bars = ax.bar(range(len(numbers)), probs, color=colors, alpha=0.8, 
-                     edgecolor='black', linewidth=1)
+                    edgecolor='black', linewidth=1)
         
         # 평균선
         mean_prob = np.mean(probs)
         ax.axhline(y=mean_prob, color='red', linestyle='--', linewidth=2,
-                  label=f'평균: {mean_prob:.2f}%')
+                label=f'평균: {mean_prob:.2f}%')
         
         # 레이블
         ax.set_xlabel('번호', fontsize=14, fontweight='bold')
@@ -107,21 +109,22 @@ class LottoMLVisualizer:
         for i, (bar, prob) in enumerate(zip(bars, probs)):
             height = bar.get_height()
             ax.text(bar.get_x() + bar.get_width()/2., height,
-                   f'{prob:.1f}%',
-                   ha='center', va='bottom', fontsize=10, fontweight='bold')
+                f'{prob:.1f}%',
+                ha='center', va='bottom', fontsize=10, fontweight='bold')
         
-        # 순위 표시
-        for i, num in enumerate(numbers[:3]):
+        # 순위 표시 (상위 3개만)
+        for i in range(min(3, len(numbers))):
             medals = ['🥇', '🥈', '🥉']
             ax.text(i, probs[i] + 1, medals[i], ha='center', fontsize=16)
         
+        # tight_layout 안전하게 처리
         try:
-            plt.tight_layout()
-        except:
-            plt.subplots_adjust(left=0.1, right=0.95, top=0.92, bottom=0.1)
+            fig.tight_layout(pad=1.0)
+        except Exception:
+            fig.subplots_adjust(left=0.08, right=0.98, top=0.92, bottom=0.1)
 
         if save_path:
-            plt.savefig(save_path, dpi=self.default_dpi, bbox_inches='tight')
+            fig.savefig(save_path, dpi=80, bbox_inches='tight')
                 
         return fig
     

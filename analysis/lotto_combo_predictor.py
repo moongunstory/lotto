@@ -2,6 +2,8 @@
 로또 6/45 조합 예측 모듈
 6개 번호 조합을 직접 예측하고 스코어링
 """
+import sys, os
+sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 
 import pandas as pd
 import numpy as np
@@ -445,7 +447,7 @@ class LottoComboPredictor:
 
 
 if __name__ == "__main__":
-    from .lotto_feature_engineer import LottoFeatureEngineer
+    from analysis.lotto_feature_engineer import LottoFeatureEngineer
     from .lotto_number_predictor import LottoNumberPredictor
     
     print("\n" + "="*60)

@@ -2,6 +2,8 @@
 로또 6/45 번호별 확률 예측 모듈
 ML 모델을 사용하여 각 번호(1~45)의 다음 회차 출현 확률 예측
 """
+import sys, os
+sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 
 import pandas as pd
 import numpy as np
@@ -265,11 +267,9 @@ class LottoNumberPredictor:
             probabilities = self.predict_probabilities(feature_engineer, draw_no)
             
             # 실제 당첨번호
-            actual_row = df[df['draw_no'] == draw_no]
-            if actual_row.empty:
+            if draw_no not in df.index:
                 continue
-            
-            actual_row = actual_row.iloc[0]
+            actual_row = df.loc[draw_no]
             actual_numbers = [
                 int(actual_row['n1']), int(actual_row['n2']), int(actual_row['n3']),
                 int(actual_row['n4']), int(actual_row['n5']), int(actual_row['n6'])
@@ -390,8 +390,8 @@ class LottoNumberPredictor:
 
 
 if __name__ == "__main__":
-    from .lotto_feature_engineer import LottoFeatureEngineer
-    
+    from analysis.lotto_feature_engineer import LottoFeatureEngineer
+
     print("\n" + "="*60)
     print("🤖 Number Predictor 테스트")
     print("="*60)
