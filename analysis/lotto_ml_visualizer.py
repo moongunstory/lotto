@@ -15,25 +15,25 @@ import platform
 # 한글 폰트 설정
 def set_korean_font():
     """한글 폰트 및 이모지 지원 설정"""
+    import os
+    os.environ['MPLBACKEND'] = 'Agg'  # 백엔드 강제 설정
+    
     system = platform.system()
 
-    if system == 'Darwin':  # macOS
+    if system == 'Darwin':
         plt.rc('font', family='AppleGothic')
     elif system == 'Windows':
-        # 이모지를 지원하는 폰트를 폴백으로 추가
         plt.rcParams['font.family'] = ['Malgun Gothic', 'Segoe UI Emoji']
-    else:  # Linux
-        # Linux 환경에서는 noto-color-emoji 폰트 설치가 필요할 수 있습니다.
-        # sudo apt-get install fonts-noto-color-emoji
+    else:
         plt.rcParams['font.family'] = ['NanumGothic', 'DejaVu Sans', 'Noto Color Emoji']
 
     plt.rcParams['axes.unicode_minus'] = False
-    # 일부 환경(특히 Windows HiDPI)에서는 Matplotlib이 매우 큰 DPI를 사용해
-    # Streamlit에서 이미지를 변환할 때 DecompressionBombError가 발생할 수 있다.
-    # 기본 Figure/Save DPI를 안전한 값으로 제한한다.
-    safe_dpi = 120
-    plt.rcParams['figure.dpi'] = safe_dpi
-    plt.rcParams['savefig.dpi'] = safe_dpi
+    
+    # 안전한 DPI 및 크기 설정
+    plt.rcParams['figure.dpi'] = 80
+    plt.rcParams['savefig.dpi'] = 80
+    plt.rcParams['figure.figsize'] = (10, 5)
+    plt.rcParams['figure.max_open_warning'] = 0
 
 
 class LottoMLVisualizer:
@@ -41,8 +41,8 @@ class LottoMLVisualizer:
     
     def __init__(self):
         set_korean_font()
-        self.default_dpi = 120
-        self.default_figsize = (14, 7)
+        self.default_dpi = 80  # 120 → 80
+        self.default_figsize = (10, 5)  # (14, 7) → (10, 5)로 축소
         self.colors = {
             'primary': '#4A90E2',
             'secondary': '#7B68EE',
@@ -54,7 +54,8 @@ class LottoMLVisualizer:
 
     def _create_figure(self, figsize):
         """안전한 DPI가 적용된 Figure 생성"""
-        fig, ax = plt.subplots(figsize=figsize)
+        fig, ax = plt.subplots(figsize=figsize, dpi=self.default_dpi)
+        # 추가 안전장치
         fig.set_dpi(self.default_dpi)
         return fig, ax
     
@@ -114,11 +115,14 @@ class LottoMLVisualizer:
             medals = ['🥇', '🥈', '🥉']
             ax.text(i, probs[i] + 1, medals[i], ha='center', fontsize=16)
         
-        plt.tight_layout()
-        
+        try:
+            plt.tight_layout()
+        except:
+            plt.subplots_adjust(left=0.1, right=0.95, top=0.92, bottom=0.1)
+
         if save_path:
             plt.savefig(save_path, dpi=self.default_dpi, bbox_inches='tight')
-        
+                
         return fig
     
     def plot_probability_heatmap(self, probabilities, save_path=None):

@@ -3,9 +3,19 @@
 데이터 수집, 패턴 분석, 번호 추천, 투자 시뮬레이션 통합
 """
 
+# ==================== CRITICAL FIX: PIL 이미지 크기 제한 해제 ====================
+from PIL import Image
+Image.MAX_IMAGE_PIXELS = None  # 이미지 크기 제한 완전 해제
+
+import warnings
+warnings.filterwarnings('ignore', category=Image.DecompressionBombWarning)
+
+import os
+os.environ['MPLBACKEND'] = 'Agg'
+# ================================================================================
+
 import streamlit as st
 import sys
-import os
 import math
 import random
 import pandas as pd
@@ -415,8 +425,8 @@ def show_ai_smart_combo_tab():
             if st.session_state.predicted_probabilities:
                 top_k = st.slider("확률 순위 표시 개수", 10, 45, 20)
                 fig = ml_visualizer.plot_number_probabilities(st.session_state.predicted_probabilities, top_k=top_k)
-                st.pyplot(fig)
-                plt.close()
+                st.pyplot(fig, use_container_width=False)
+                plt.close(fig)
             else:
                 st.info("버튼을 눌러 번호 확률 예측을 시작하세요.")
         st.markdown('</div>', unsafe_allow_html=True)
