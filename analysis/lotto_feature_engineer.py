@@ -1,383 +1,202 @@
 """
-로또 6/45 피처 엔지니어링 모듈
+로또 6/45 피처 엔지니어링 모듈 (고속 벡터화 버전)
 ML 학습을 위한 피처 생성 및 데이터셋 구축
 """
 
 import pandas as pd
 import numpy as np
 from pathlib import Path
-from collections import defaultdict
-from sklearn.preprocessing import StandardScaler
-
+import time
 
 class LottoFeatureEngineer:
-    """로또 피처 엔지니어링 클래스"""
+    """로또 피처 엔지니어링 클래스 (벡터화 최적화)"""
     
     def __init__(self, data_path='data/lotto_history.csv'):
         self.data_path = Path(data_path)
         self.df = None
+        self.features_df = None # 피처 캐시
         self.load_data()
         
     def load_data(self):
         """데이터 로드"""
         if self.data_path.exists():
-            self.df = pd.read_csv(self.data_path)
+            self.df = pd.read_csv(self.data_path, index_col='draw_no')
             print(f"✅ 데이터 로드 완료: {len(self.df)}회차")
         else:
             raise FileNotFoundError(f"데이터 파일을 찾을 수 없습니다: {self.data_path}")
-    
-    # ========== 번호 히스토리 분석 ==========
-    
-    def _get_number_history(self, number, until_draw=None):
-        """특정 번호의 출현 이력 반환"""
-        if until_draw is None:
-            df_subset = self.df
-        else:
-            df_subset = self.df[self.df['draw_no'] < until_draw]
-        
-        appearances = []
-        for idx, row in df_subset.iterrows():
-            if number in [row['n1'], row['n2'], row['n3'], row['n4'], row['n5'], row['n6']]:
-                appearances.append(row['draw_no'])
-        
-        return appearances
-    
-    def _calculate_dormant_period(self, number, current_draw):
-        """휴면 기간 계산 (마지막 출현 후 경과 회차)"""
-        history = self._get_number_history(number, until_draw=current_draw)
-        
-        if not history:
-            return 999  # 한 번도 안 나온 경우
-        
-        last_appearance = max(history)
-        return current_draw - last_appearance
-    
-    def _calculate_reappear_gaps(self, number, until_draw=None):
-        """재출현 간격들 계산"""
-        history = self._get_number_history(number, until_draw)
-        
-        if len(history) < 2:
-            return []
-        
-        gaps = []
-        for i in range(1, len(history)):
-            gaps.append(history[i] - history[i-1])
-        
-        return gaps
-    
-    # ========== 번호별 피처 추출 ==========
-    
-    def extract_number_features(self, target_draw_no):
-        """
-        특정 회차 시점에서 각 번호(1~45)의 피처 추출
-        
-        Args:
-            target_draw_no: 타겟 회차 번호
-            
-        Returns:
-            DataFrame: (45 rows × N features)
-        """
-        features_list = []
-        
-        for number in range(1, 46):
-            features = self._extract_single_number_features(number, target_draw_no)
-            features['number'] = number
-            features_list.append(features)
-        
-        df_features = pd.DataFrame(features_list)
-        return df_features
-    
-    def _extract_single_number_features(self, number, target_draw_no):
-        """단일 번호의 피처 추출"""
-        features = {}
-        
-        # 1. 최근 N회 출현 빈도
-        for window in [10, 30, 50, 100]:
-            start_draw = max(1, target_draw_no - window)
-            recent_df = self.df[(self.df['draw_no'] >= start_draw) & 
-                               (self.df['draw_no'] < target_draw_no)]
-            
-            count = 0
-            for _, row in recent_df.iterrows():
-                if number in [row['n1'], row['n2'], row['n3'], row['n4'], row['n5'], row['n6']]:
-                    count += 1
-            
-            features[f'recent_{window}_freq'] = count
-            features[f'recent_{window}_rate'] = count / window if window > 0 else 0
-        
-        # 2. 휴면 기간
-        features['dormant_period'] = self._calculate_dormant_period(number, target_draw_no)
-        
+
+    def _create_feature_grid(self):
+        """모든 번호와 모든 회차에 대한 그리드 생성"""
+        print("📊 피처 그리드 생성 중...")
+        # 1. 모든 회차, 모든 번호에 대한 기본 그리드 생성
+        draws = np.arange(1, self.df.index.max() + 2)
+        numbers = np.arange(1, 46)
+        grid = pd.DataFrame(np.array(np.meshgrid(draws, numbers)).T.reshape(-1, 2), columns=['draw_no', 'number'])
+        grid.set_index(['draw_no', 'number'], inplace=True)
+
+        # 2. 실제 당첨 번호 데이터 "long" 포맷으로 변경
+        winning_numbers_long = self.df.reset_index().melt(
+            id_vars='draw_no',
+            value_vars=[f'n{i}' for i in range(1, 7)],
+            value_name='number'
+        )
+        winning_numbers_long['appeared'] = 1
+        winning_numbers_long = winning_numbers_long.drop(columns='variable')
+        winning_numbers_long = winning_numbers_long.astype(int).set_index(['draw_no', 'number'])
+
+        # 3. 그리드에 당첨 여부(appeared) 병합
+        grid = grid.join(winning_numbers_long, how='left')
+        grid['appeared'] = grid['appeared'].fillna(0).astype(int)
+        return grid
+
+    def calculate_all_features(self):
+        """벡터화 연산을 사용하여 모든 피처를 한 번에 계산"""
+        if self.features_df is not None:
+            print("⚡️ 캐시된 피처를 사용합니다.")
+            return self.features_df
+
+        start_time = time.time()
+        print("🚀 모든 피처를 새로 계산합니다 (벡터화 방식)... 시간이 소요될 수 있습니다.")
+
+        df = self._create_feature_grid()
+        df.sort_index(inplace=True)
+
+        # 그룹화 객체 생성
+        grouped = df.groupby(level='number')
+
+        # 1. 최근 N회 출현 빈도 (롤링 윈도우 사용)
+        print("   - (1/5) 출현 빈도 계산 중...")
+        windows = [10, 30, 50, 100]
+        for w in windows:
+            # shift(1)을 통해 현재 회차를 제외하고 이전 N회차까지의 합을 구함
+            df[f'recent_{w}_freq'] = grouped['appeared'].transform(
+                lambda x: x.shift(1).rolling(window=w, min_periods=1).sum()
+            ).fillna(0)
+            df[f'recent_{w}_rate'] = df[f'recent_{w}_freq'] / w
+
+        # 2. 휴면 기간 (Dormant Period) - 수정된 로직
+        print("   - (2/5) 휴면 기간 계산 중...")
+        appeared_draws = df.index.get_level_values('draw_no').to_series(index=df.index)
+        df['last_appeared_draw'] = appeared_draws.where(df['appeared'] == 1)
+        df['last_appeared_draw'] = grouped['last_appeared_draw'].ffill()
+        df['dormant_period'] = (df.index.get_level_values('draw_no') - df['last_appeared_draw']).fillna(999).astype(int)
+
         # 3. 재출현 간격 통계
-        gaps = self._calculate_reappear_gaps(number, until_draw=target_draw_no)
-        if gaps:
-            features['avg_reappear_gap'] = np.mean(gaps)
-            features['std_reappear_gap'] = np.std(gaps) if len(gaps) > 1 else 0
-            features['min_reappear_gap'] = np.min(gaps)
-            features['max_reappear_gap'] = np.max(gaps)
-        else:
-            features['avg_reappear_gap'] = 0
-            features['std_reappear_gap'] = 0
-            features['min_reappear_gap'] = 0
-            features['max_reappear_gap'] = 0
+        print("   - (3/5) 재출현 간격 통계 계산 중...")
+        df['appeared_draw'] = np.where(df['appeared'] == 1, df.index.get_level_values('draw_no'), np.nan)
+        df['reappear_gap'] = grouped['appeared_draw'].transform(lambda x: x.diff())
         
-        # 4. 전체 출현율
-        total_history = self._get_number_history(number, until_draw=target_draw_no)
-        total_draws = len(self.df[self.df['draw_no'] < target_draw_no])
-        features['total_appearance_rate'] = len(total_history) / total_draws if total_draws > 0 else 0
+        gap_windows = [10, 30, 50, 1000] # 1000은 거의 전체 기간을 의미
+        for w in gap_windows:
+            df[f'avg_reappear_gap_{w}'] = grouped['reappear_gap'].transform(lambda x: x.shift(1).rolling(w, min_periods=1).mean()).fillna(0)
+            df[f'std_reappear_gap_{w}'] = grouped['reappear_gap'].transform(lambda x: x.shift(1).rolling(w, min_periods=1).std()).fillna(0)
+            df[f'max_reappear_gap_{w}'] = grouped['reappear_gap'].transform(lambda x: x.shift(1).rolling(w, min_periods=1).max()).fillna(0)
+
+        # 4. 전체 출현율 (Expanding Window 사용)
+        print("   - (4/5) 전체 출현율 및 모멘텀 계산 중...")
+        df['total_appearance_rate'] = grouped['appeared'].transform(
+            lambda x: x.shift(1).expanding(1).mean()
+        ).fillna(0)
+
+        # 5. 출현 모멘텀
+        df['momentum'] = (df['recent_10_freq'] * 0.5 + df['recent_30_freq'] * 0.3 + df['recent_50_freq'] * 0.2).fillna(0)
+
+        # 6. 구간별 정보 & 홀짝
+        df_reset = df.reset_index()
+        df['range_group'] = pd.cut(df_reset['number'].values, bins=[0, 10, 20, 30, 40, 45], labels=['1-10', '11-20', '21-30', '31-40', '41-45'])
+        df['is_odd'] = (df_reset['number'].values % 2).astype(int)
+
+        # 7. 최근 추세
+        df['trend_ratio'] = (df['recent_10_freq'] / df['recent_30_freq']).fillna(0).replace(np.inf, 0)
+
+        # 사용하지 않는 중간 컬럼 제거
+        df = df.drop(columns=['last_appeared_draw', 'appeared_draw', 'reappear_gap'])
         
-        # 5. 출현 모멘텀 (최근일수록 가중치)
-        momentum = 0
-        for window, weight in [(10, 0.5), (30, 0.3), (50, 0.2)]:
-            start_draw = max(1, target_draw_no - window)
-            recent_df = self.df[(self.df['draw_no'] >= start_draw) & 
-                               (self.df['draw_no'] < target_draw_no)]
-            
-            count = 0
-            for _, row in recent_df.iterrows():
-                if number in [row['n1'], row['n2'], row['n3'], row['n4'], row['n5'], row['n6']]:
-                    count += 1
-            
-            momentum += count * weight
-        
-        features['momentum'] = momentum
-        
-        # 6. 구간별 정보
-        if 1 <= number <= 10:
-            range_group = '1-10'
-        elif 11 <= number <= 20:
-            range_group = '11-20'
-        elif 21 <= number <= 30:
-            range_group = '21-30'
-        elif 31 <= number <= 40:
-            range_group = '31-40'
-        else:
-            range_group = '41-45'
-        
-        features['range_group'] = range_group
-        
-        # 7. 홀짝
-        features['is_odd'] = 1 if number % 2 == 1 else 0
-        
-        # 8. 최근 추세 (최근 30회 vs 최근 10회 비율)
-        if features['recent_30_freq'] > 0:
-            features['trend_ratio'] = features['recent_10_freq'] / features['recent_30_freq']
-        else:
-            features['trend_ratio'] = 0
-        
-        return features
-    
-    # ========== 조합 피처 추출 ==========
-    
-    def extract_combo_features(self, numbers, reference_draw_no):
-        """
-        6개 번호 조합의 피처 추출
-        
-        Args:
-            numbers: 6개 번호 리스트
-            reference_draw_no: 기준 회차 번호
-            
-        Returns:
-            dict: 조합 피처
-        """
-        numbers = sorted(numbers)
-        features = {}
-        
-        # 1. 기본 통계
-        features['sum_total'] = sum(numbers)
-        features['number_range'] = max(numbers) - min(numbers)
-        features['avg_number'] = np.mean(numbers)
-        features['std_number'] = np.std(numbers)
-        
-        # 2. 홀짝 분포
-        odd_count = sum(1 for n in numbers if n % 2 == 1)
-        features['odd_count'] = odd_count
-        features['even_count'] = 6 - odd_count
-        features['odd_even_balance'] = abs(odd_count - 3)  # 3:3에서 얼마나 벗어났는지
-        
-        # 3. 연속번호
-        consecutive_pairs = 0
-        for i in range(len(numbers) - 1):
-            if numbers[i+1] - numbers[i] == 1:
-                consecutive_pairs += 1
-        features['consecutive_pairs'] = consecutive_pairs
-        
-        # 4. 구간 분포
-        range_dist = {'1-10': 0, '11-20': 0, '21-30': 0, '31-40': 0, '41-45': 0}
-        for num in numbers:
-            if 1 <= num <= 10:
-                range_dist['1-10'] += 1
-            elif 11 <= num <= 20:
-                range_dist['11-20'] += 1
-            elif 21 <= num <= 30:
-                range_dist['21-30'] += 1
-            elif 31 <= num <= 40:
-                range_dist['31-40'] += 1
-            else:
-                range_dist['41-45'] += 1
-        
-        for key, val in range_dist.items():
-            features[f'range_{key}'] = val
-        
-        # 구간 집중도 (entropy)
-        probs = [v/6 for v in range_dist.values() if v > 0]
-        entropy = -sum(p * np.log2(p) for p in probs if p > 0)
-        features['range_entropy'] = entropy
-        
-        # 5. 번호별 개별 피처의 평균
-        dormant_periods = []
-        momentums = []
-        recent_10_freqs = []
-        
-        for num in numbers:
-            num_features = self._extract_single_number_features(num, reference_draw_no)
-            dormant_periods.append(num_features['dormant_period'])
-            momentums.append(num_features['momentum'])
-            recent_10_freqs.append(num_features['recent_10_freq'])
-        
-        features['avg_dormant'] = np.mean(dormant_periods)
-        features['max_dormant'] = np.max(dormant_periods)
-        features['total_momentum'] = sum(momentums)
-        features['avg_momentum'] = np.mean(momentums)
-        features['total_recent_10_freq'] = sum(recent_10_freqs)
-        
-        # 6. 최근 패턴 유사도 (최근 10회 당첨번호와의 유사도)
-        recent_draws = self.df[self.df['draw_no'] < reference_draw_no].tail(10)
-        similarity_scores = []
-        
-        for _, row in recent_draws.iterrows():
-            recent_numbers = [row['n1'], row['n2'], row['n3'], row['n4'], row['n5'], row['n6']]
-            overlap = len(set(numbers) & set(recent_numbers))
-            similarity_scores.append(overlap)
-        
-        features['avg_similarity_to_recent'] = np.mean(similarity_scores) if similarity_scores else 0
-        features['max_similarity_to_recent'] = np.max(similarity_scores) if similarity_scores else 0
-        
-        return features
-    
-    # ========== 학습 데이터셋 생성 ==========
-    
+        self.features_df = df
+        end_time = time.time()
+        print(f"✅ 모든 피처 계산 완료! (소요 시간: {end_time - start_time:.2f}초)")
+        return df
+
     def build_number_training_data(self, start_draw=100, end_draw=None):
-        """
-        번호 예측용 학습 데이터셋 생성
-        
-        Args:
-            start_draw: 시작 회차 (초기 데이터는 피처 계산에 필요)
-            end_draw: 종료 회차 (None이면 최신 회차까지)
-            
-        Returns:
-            X: 피처 DataFrame
-            y: 타겟 (각 번호가 다음 회차에 출현했는지 0/1)
-            draw_numbers: 회차 번호 리스트
-        """
+        """번호 예측용 학습 데이터셋 생성 (고속 슬라이싱)"""
+        if self.features_df is None:
+            self.calculate_all_features()
+
         if end_draw is None:
-            end_draw = int(self.df['draw_no'].max())
+            end_draw = int(self.df.index.max())
         
-        X_list = []
-        y_list = []
-        draw_list = []
+        print(f"🔪 학습 데이터 슬라이싱: {start_draw}회 ~ {end_draw-1}회")
         
-        print(f"📊 학습 데이터 생성 중: {start_draw}회 ~ {end_draw-1}회")
+        # 1. 피처(X)와 타겟(y) 데이터 슬라이싱
+        # X: start_draw ~ end_draw-1 회차의 피처를 사용
+        # y: start_draw ~ end_draw-1 회차의 출현 여부를 타겟으로 사용
+        train_indices = (self.features_df.index.get_level_values('draw_no') >= start_draw) & \
+                        (self.features_df.index.get_level_values('draw_no') < end_draw)
         
-        for draw_no in range(start_draw, end_draw):
-            # 현재 회차의 피처 추출
-            features_df = self.extract_number_features(draw_no)
-            
-            # 다음 회차의 실제 당첨번호
-            next_draw = self.df[self.df['draw_no'] == draw_no]
-            if next_draw.empty:
-                continue
-            
-            next_draw = next_draw.iloc[0]
-            winning_numbers = [
-                int(next_draw['n1']), int(next_draw['n2']), int(next_draw['n3']),
-                int(next_draw['n4']), int(next_draw['n5']), int(next_draw['n6'])
-            ]
-            
-            # 각 번호마다 타겟 생성
-            for idx, row in features_df.iterrows():
-                number = int(row['number'])
-                is_winning = 1 if number in winning_numbers else 0
-                
-                # 피처와 타겟 저장
-                feature_dict = row.drop('number').to_dict()
-                X_list.append(feature_dict)
-                y_list.append(is_winning)
-                draw_list.append(draw_no)
+        features_slice = self.features_df.loc[train_indices]
         
-        X = pd.DataFrame(X_list)
-        y = pd.Series(y_list)
-        
+        X = features_slice.drop(columns=['appeared'])
+        y = features_slice['appeared']
+        draw_list = features_slice.index.get_level_values('draw_no').tolist()
+
         # 범주형 변수 인코딩
         if 'range_group' in X.columns:
             X = pd.get_dummies(X, columns=['range_group'], prefix='range')
         
         print(f"✅ 학습 데이터 생성 완료: {len(X)}개 샘플")
-        print(f"   - 출현(1): {y.sum()}개 ({y.mean()*100:.2f}%)")
-        print(f"   - 미출현(0): {(~y.astype(bool)).sum()}개")
-        
         return X, y, draw_list
-    
-    def build_combo_training_data(self, start_draw=100, end_draw=None, negative_samples=5):
-        """
-        조합 예측용 학습 데이터셋 생성
+
+    def extract_number_features(self, target_draw_no):
+        """특정 회차의 모든 번호에 대한 피처 추출 (고속)"""
+        if self.features_df is None:
+            self.calculate_all_features()
         
-        Args:
-            start_draw: 시작 회차
-            end_draw: 종료 회차
-            negative_samples: 각 당첨 조합당 생성할 음성 샘플 수
-            
-        Returns:
-            X: 피처 DataFrame
-            y: 타겟 (실제 당첨=1, 랜덤 샘플=0)
-            draw_numbers: 회차 번호 리스트
-        """
-        if end_draw is None:
-            end_draw = int(self.df['draw_no'].max())
+        # target_draw_no에 해당하는 피처를 가져옴
+        try:
+            features_for_draw = self.features_df.loc[target_draw_no]
+        except KeyError:
+            raise ValueError(f"{target_draw_no}회차에 대한 피처를 계산할 수 없습니다. 데이터 범위를 확인하세요.")
         
-        X_list = []
-        y_list = []
-        draw_list = []
+        return features_for_draw.reset_index().drop(columns=['appeared'])
+
+    def extract_combo_features(self, numbers, reference_draw_no):
+        """6개 번호 조합의 피처 추출 (고속)"""
+        numbers = sorted(numbers)
+        features = {}
+
+        # 1. 조합 자체의 통계
+        features['sum_total'] = sum(numbers)
+        features['number_range'] = max(numbers) - min(numbers)
+        features['avg_number'] = np.mean(numbers)
+        features['std_number'] = np.std(numbers)
+        odd_count = sum(1 for n in numbers if n % 2 == 1)
+        features['odd_count'] = odd_count
+        features['even_count'] = 6 - odd_count
         
-        print(f"📊 조합 학습 데이터 생성 중: {start_draw}회 ~ {end_draw}회")
-        
-        for draw_no in range(start_draw, end_draw + 1):
-            draw_row = self.df[self.df['draw_no'] == draw_no]
-            if draw_row.empty:
-                continue
-            
-            draw_row = draw_row.iloc[0]
-            winning_numbers = [
-                int(draw_row['n1']), int(draw_row['n2']), int(draw_row['n3']),
-                int(draw_row['n4']), int(draw_row['n5']), int(draw_row['n6'])
-            ]
-            
-            # 1. 실제 당첨 조합 (positive sample)
-            features = self.extract_combo_features(winning_numbers, draw_no)
-            X_list.append(features)
-            y_list.append(1)
-            draw_list.append(draw_no)
-            
-            # 2. 랜덤 조합 (negative samples)
-            for _ in range(negative_samples):
-                random_numbers = sorted(np.random.choice(range(1, 46), size=6, replace=False))
-                features = self.extract_combo_features(random_numbers, draw_no)
-                X_list.append(features)
-                y_list.append(0)
-                draw_list.append(draw_no)
-        
-        X = pd.DataFrame(X_list)
-        y = pd.Series(y_list)
-        
-        print(f"✅ 조합 학습 데이터 생성 완료: {len(X)}개 샘플")
-        print(f"   - 당첨 조합(1): {y.sum()}개")
-        print(f"   - 랜덤 조합(0): {(~y.astype(bool)).sum()}개")
-        
-        return X, y, draw_list
-    
+        # 2. 번호별 개별 피처의 평균/합계 (벡터화된 방식으로 추출)
+        try:
+            num_features_df = self.extract_number_features(reference_draw_no)
+            combo_num_features = num_features_df[num_features_df['number'].isin(numbers)]
+
+            features['avg_dormant'] = combo_num_features['dormant_period'].mean()
+            features['max_dormant'] = combo_num_features['dormant_period'].max()
+            features['total_momentum'] = combo_num_features['momentum'].sum()
+            features['avg_momentum'] = combo_num_features['momentum'].mean()
+            features['total_recent_10_freq'] = combo_num_features['recent_10_freq'].sum()
+
+        except ValueError:
+             # 예측 시점의 피처를 계산할 수 없는 경우 (너무 과거 데이터 등)
+            features['avg_dormant'] = 0
+            features['max_dormant'] = 0
+            features['total_momentum'] = 0
+            features['avg_momentum'] = 0
+            features['total_recent_10_freq'] = 0
+
+        return features
+
     def get_latest_draw_number(self):
         """최신 회차 번호 반환"""
-        return int(self.df['draw_no'].max())
+        return int(self.df.index.max())
 
 
 if __name__ == "__main__":
@@ -385,35 +204,33 @@ if __name__ == "__main__":
     engineer = LottoFeatureEngineer()
     
     print("\n" + "="*60)
-    print("📊 Feature Engineer 테스트")
+    print("📊 Feature Engineer 속도 테스트")
     print("="*60)
     
-    # 1. 번호별 피처 추출 테스트
-    print("\n[1] 번호별 피처 추출 (1000회차 시점)")
     latest_draw = engineer.get_latest_draw_number()
-    test_draw = min(1000, latest_draw)
     
-    features = engineer.extract_number_features(test_draw)
-    print(features.head(10))
-    print(f"\n피처 개수: {len(features.columns)}개")
-    print(f"번호 개수: {len(features)}개")
+    # 1. 전체 피처 계산 테스트
+    engineer.calculate_all_features()
     
-    # 2. 조합 피처 추출 테스트
-    print("\n[2] 조합 피처 추출")
-    test_numbers = [7, 12, 27, 31, 38, 42]
-    combo_features = engineer.extract_combo_features(test_numbers, test_draw)
-    print(f"조합: {test_numbers}")
-    print(f"피처 개수: {len(combo_features)}개")
-    for key, val in list(combo_features.items())[:10]:
-        print(f"  {key}: {val}")
-    
-    # 3. 학습 데이터셋 생성 테스트 (작은 범위)
-    print("\n[3] 학습 데이터셋 생성 테스트")
-    start = max(100, latest_draw - 50)
+    # 2. 학습 데이터셋 생성 테스트 (큰 범위)
+    start = max(100, latest_draw - 500)
     end = latest_draw
     
+    start_time = time.time()
     X, y, draws = engineer.build_number_training_data(start_draw=start, end_draw=end)
-    print(f"\nX shape: {X.shape}")
-    print(f"y shape: {y.shape}")
-    print(f"\n피처 목록:")
+    end_time = time.time()
+    
+    print(f"\n[ 학습 데이터 생성 테스트 ]")
+    print(f"   - X shape: {X.shape}")
+    print(f"   - y shape: {y.shape}")
+    print(f"   - 소요 시간: {end_time - start_time:.2f}초")
+    print(f"\n피처 목록 ({len(X.columns)}개):")
     print(X.columns.tolist())
+
+    # 3. 특정 회차 피처 추출 테스트
+    start_time = time.time()
+    features = engineer.extract_number_features(latest_draw)
+    end_time = time.time()
+    print(f"\n[ 특정 회차 피처 추출 테스트 ]")
+    print(f"   - 소요 시간: {end_time - start_time:.2f}초")
+    print(features.head())

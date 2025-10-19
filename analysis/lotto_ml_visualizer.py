@@ -14,15 +14,18 @@ import platform
 
 # 한글 폰트 설정
 def set_korean_font():
-    """한글 폰트 설정"""
+    """한글 폰트 및 이모지 지원 설정"""
     system = platform.system()
     
     if system == 'Darwin':  # macOS
         plt.rc('font', family='AppleGothic')
     elif system == 'Windows':
-        plt.rc('font', family='Malgun Gothic')
+        # 이모지를 지원하는 폰트를 폴백으로 추가
+        plt.rcParams['font.family'] = ['Malgun Gothic', 'Segoe UI Emoji']
     else:  # Linux
-        plt.rc('font', family='DejaVu Sans')
+        # Linux 환경에서는 noto-color-emoji 폰트 설치가 필요할 수 있습니다.
+        # sudo apt-get install fonts-noto-color-emoji
+        plt.rcParams['font.family'] = ['NanumGothic', 'DejaVu Sans', 'Noto Color Emoji']
     
     plt.rcParams['axes.unicode_minus'] = False
 
@@ -51,7 +54,7 @@ class LottoMLVisualizer:
             highlight_numbers: 강조할 번호 리스트
             save_path: 저장 경로
         """
-        fig, ax = plt.subplots(figsize=(16, 8))
+        fig, ax = plt.subplots(figsize=(16, 8), dpi=100)
         
         # 확률 순으로 정렬
         sorted_probs = sorted(probabilities.items(), key=lambda x: x[1], reverse=True)[:top_k]
