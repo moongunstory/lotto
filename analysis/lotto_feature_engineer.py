@@ -10,12 +10,19 @@ import time
 
 class LottoFeatureEngineer:
     """로또 피처 엔지니어링 클래스 (벡터화 최적화)"""
+
+    # 피처 구성이 변경될 때마다 버전을 갱신한다.
+    FEATURE_VERSION = "2024.02"
     
     def __init__(self, data_path='data/lotto_history.csv'):
         self.data_path = Path(data_path)
         self.df = None
         self.features_df = None # 피처 캐시
         self.load_data()
+
+    def get_feature_version(self):
+        """현재 피처 엔지니어링 스키마 버전을 반환"""
+        return self.FEATURE_VERSION
         
     def load_data(self):
         """데이터 로드"""

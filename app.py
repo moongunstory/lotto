@@ -397,25 +397,44 @@ def show_ai_smart_combo_tab():
             st.info("설정된 회차로 학습된 모델이 있으면 불러오고, 없으면 새로 학습합니다.")
             if st.button("📈 AI 번호 확률 예측", type='primary', use_container_width=True):
                 model_path = f'models/number_predictor_{train_start_draw}_{train_end_draw}.pkl'
-                
+
                 try:
                     number_predictor = LottoNumberPredictor(model_type='xgboost')
-                    
-                    if Path(model_path).exists():
-                        with st.spinner(f"기존 학습 모델({train_start_draw}~{train_end_draw}회)을 불러옵니다..."):
-                            number_predictor.load_model(model_path)
-                        st.success("✅ 기존 모델 로드 완료!")
-                    else:
-                        with st.spinner(f"새로운 모델({train_start_draw}~{train_end_draw}회)을 학습합니다... (시간 소요)"):
+                    expected_version = engineer.get_feature_version()
+                    model_exists = Path(model_path).exists()
+                    need_training = not model_exists
+
+                    if model_exists:
+                        try:
+                            with st.spinner(f"기존 학습 모델({train_start_draw}~{train_end_draw}회)을 불러옵니다..."):
+                                number_predictor.load_model(model_path, expected_feature_version=expected_version)
+                            st.success("✅ 기존 모델 로드 완료!")
+                        except ValueError as load_err:
+                            st.warning(f"⚠️ {load_err}")
+                            need_training = True
+
+                    if need_training:
+                        training_label = "새로운 모델" if not model_exists else "모델을 다시 학습"
+                        with st.spinner(f"{training_label}({train_start_draw}~{train_end_draw}회)을 학습합니다... (시간 소요)"):
                             number_predictor.train(engineer, start_draw=train_start_draw, end_draw=train_end_draw)
                             number_predictor.save_model(model_path)
-                        st.success("✅ 새로운 모델 학습 및 저장 완료!")
-                    
+                        st.success("✅ 모델 학습 및 저장 완료!")
+
                     st.session_state.number_predictor = number_predictor
-                    
-                    with st.spinner("AI가 번호별 출현 확률을 예측합니다..."):
-                        st.session_state.predicted_probabilities = number_predictor.predict_probabilities(engineer)
-                    st.success("✅ 확률 예측 완료!")
+
+                    try:
+                        with st.spinner("AI가 번호별 출현 확률을 예측합니다..."):
+                            st.session_state.predicted_probabilities = number_predictor.predict_probabilities(engineer)
+                        st.success("✅ 확률 예측 완료!")
+                    except ValueError as feature_err:
+                        st.warning(f"⚠️ {feature_err} 최신 피처에 맞춰 모델을 다시 학습합니다.")
+                        with st.spinner("AI 모델을 최신 피처로 재학습합니다... (시간 소요)"):
+                            number_predictor.train(engineer, start_draw=train_start_draw, end_draw=train_end_draw)
+                            number_predictor.save_model(model_path)
+                        st.session_state.number_predictor = number_predictor
+                        with st.spinner("재학습된 모델로 확률을 다시 계산합니다..."):
+                            st.session_state.predicted_probabilities = number_predictor.predict_probabilities(engineer)
+                        st.success("✅ 모델 재학습 및 확률 예측 완료!")
 
                 except Exception as e:
                     st.error(f"❌ 작업 실패: {e}")
@@ -425,7 +444,7 @@ def show_ai_smart_combo_tab():
             if st.session_state.predicted_probabilities:
                 top_k = st.slider("확률 순위 표시 개수", 10, 45, 20)
                 fig = ml_visualizer.plot_number_probabilities(st.session_state.predicted_probabilities, top_k=top_k)
-                st.pyplot(fig, use_container_width=False)
+                st.pyplot(fig, use_container_width=True)
                 plt.close(fig)
             else:
                 st.info("버튼을 눌러 번호 확률 예측을 시작하세요.")
@@ -501,21 +520,39 @@ def show_ai_smart_combo_tab():
                             raw_combos = []
                             try:
                                 combo_predictor = LottoComboPredictor(model_type='xgboost')
+                                expected_version = engineer.get_feature_version()
+                                model_exists = Path(model_path).exists()
+                                need_training = not model_exists
 
-                                if Path(model_path).exists():
-                                    with st.spinner(f"기존 조합 모델({train_start_draw}~{train_end_draw}회)을 불러옵니다..."):
-                                        combo_predictor.load_model(model_path)
-                                    st.success("✅ 기존 조합 모델 로드 완료!")
-                                else:
-                                    with st.spinner(f"새로운 조합 모델({train_start_draw}~{train_end_draw}회)을 학습합니다... (시간 소요)"):
+                                if model_exists:
+                                    try:
+                                        with st.spinner(f"기존 조합 모델({train_start_draw}~{train_end_draw}회)을 불러옵니다..."):
+                                            combo_predictor.load_model(model_path, expected_feature_version=expected_version)
+                                        st.success("✅ 기존 조합 모델 로드 완료!")
+                                    except ValueError as load_err:
+                                        st.warning(f"⚠️ {load_err}")
+                                        need_training = True
+
+                                if need_training:
+                                    training_label = "새로운 조합 모델" if not model_exists else "조합 모델을 다시 학습"
+                                    with st.spinner(f"{training_label}({train_start_draw}~{train_end_draw}회)을 학습합니다... (시간 소요)"):
                                         combo_predictor.train(engineer, start_draw=train_start_draw, end_draw=train_end_draw)
                                         combo_predictor.save_model(model_path)
-                                    st.success("✅ 새로운 조합 모델 학습 및 저장 완료!")
-                                
+                                    st.success("✅ 조합 모델 학습 및 저장 완료!")
+
                                 st.session_state.combo_predictor = combo_predictor
 
-                                with st.spinner("학습된 모델로 최적 조합을 예측합니다..."):
-                                    raw_combos = combo_predictor.predict_top_combos(engineer, n=n_combos * 20, candidate_pool='smart', pool_size=30)
+                                try:
+                                    with st.spinner("학습된 모델로 최적 조합을 예측합니다..."):
+                                        raw_combos = combo_predictor.predict_top_combos(engineer, n=n_combos * 20, candidate_pool='smart', pool_size=30)
+                                except ValueError as feature_err:
+                                    st.warning(f"⚠️ {feature_err} 최신 피처에 맞춰 조합 모델을 다시 학습합니다.")
+                                    with st.spinner("조합 모델을 최신 피처로 재학습합니다... (시간 소요)"):
+                                        combo_predictor.train(engineer, start_draw=train_start_draw, end_draw=train_end_draw)
+                                        combo_predictor.save_model(model_path)
+                                    st.session_state.combo_predictor = combo_predictor
+                                    with st.spinner("재학습된 조합 모델로 최적 조합을 계산합니다..."):
+                                        raw_combos = combo_predictor.predict_top_combos(engineer, n=n_combos * 20, candidate_pool='smart', pool_size=30)
 
                             except Exception as e:
                                 st.error(f"❌ 조합 생성 실패: {e}")

@@ -26,6 +26,7 @@ class LottoComboPredictor:
         self.model = None
         self.scaler = StandardScaler()
         self.feature_names = []
+        self.feature_version = None
         
     def _create_model(self):
         """모델 생성"""
@@ -134,7 +135,9 @@ class LottoComboPredictor:
             print(f"   - 점수 차이: {avg_winning_score - avg_random_score:.4f}")
         
         print("\n✅ 학습 완료!")
-        
+
+        self.feature_version = feature_engineer.get_feature_version()
+
         return {
             'train_mse': train_mse,
             'val_mse': val_mse,
@@ -158,10 +161,15 @@ class LottoComboPredictor:
         """
         if self.model is None:
             raise RuntimeError("모델이 학습되지 않았습니다. train()을 먼저 실행하세요.")
-        
+
         if reference_draw is None:
             reference_draw = feature_engineer.get_latest_draw_number() + 1
-        
+
+        if self.feature_version and self.feature_version != feature_engineer.get_feature_version():
+            raise ValueError(
+                "학습된 조합 모델의 피처 버전이 현재 데이터 스키마와 다릅니다. 모델을 다시 학습해주세요."
+            )
+
         # 피처 추출
         features = feature_engineer.extract_combo_features(numbers, reference_draw)
         
@@ -200,7 +208,12 @@ class LottoComboPredictor:
         """
         if reference_draw is None:
             reference_draw = feature_engineer.get_latest_draw_number() + 1
-        
+
+        if self.feature_version and self.feature_version != feature_engineer.get_feature_version():
+            raise ValueError(
+                "학습된 조합 모델의 피처 버전이 현재 데이터 스키마와 다릅니다. 모델을 다시 학습해주세요."
+            )
+
         print(f"\n🎯 상위 {n}개 조합 예측 (모드: {candidate_pool})")
         
         scored_combos = []
@@ -400,7 +413,8 @@ class LottoComboPredictor:
             'model': self.model,
             'scaler': self.scaler,
             'feature_names': self.feature_names,
-            'model_type': self.model_type
+            'model_type': self.model_type,
+            'feature_version': self.feature_version
         }
         
         with open(path, 'wb') as f:
@@ -408,18 +422,24 @@ class LottoComboPredictor:
         
         print(f"✅ 모델 저장 완료: {path}")
     
-    def load_model(self, path='models/combo_predictor.pkl'):
+    def load_model(self, path='models/combo_predictor.pkl', expected_feature_version=None):
         """모델 로드"""
         if not Path(path).exists():
             raise FileNotFoundError(f"모델 파일을 찾을 수 없습니다: {path}")
-        
+
         with open(path, 'rb') as f:
             save_data = pickle.load(f)
-        
+
         self.model = save_data['model']
         self.scaler = save_data['scaler']
         self.feature_names = save_data['feature_names']
         self.model_type = save_data.get('model_type', 'unknown')
+        self.feature_version = save_data.get('feature_version')
+
+        if expected_feature_version and self.feature_version != expected_feature_version:
+            raise ValueError(
+                f"저장된 조합 모델 피처 버전({self.feature_version})과 현재 버전({expected_feature_version})이 다릅니다."
+            )
         
         print(f"✅ 모델 로드 완료: {path}")
 
@@ -473,7 +493,7 @@ if __name__ == "__main__":
 
     try:
         number_predictor = LottoNumberPredictor()
-        number_predictor.load_model('models/number_predictor.pkl')
+        number_predictor.load_model('models/number_predictor.pkl', expected_feature_version=engineer.get_feature_version())
 
         top_combos_ml = combo_predictor.generate_with_number_probs(
             feature_engineer=engineer,
@@ -494,5 +514,5 @@ if __name__ == "__main__":
 
     # --- 4. Save the Combo Predictor Model ---
     combo_predictor.save_model('models/combo_predictor.pkl')
-    
+
     print("\n✅ 테스트 완료!")

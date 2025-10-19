@@ -26,6 +26,7 @@ class LottoNumberPredictor:
         self.scaler = StandardScaler()
         self.feature_names = []
         self.feature_importance = {}
+        self.feature_version = None
         
     def _create_model(self):
         """모델 생성"""
@@ -94,7 +95,7 @@ class LottoNumberPredictor:
         self.model = self._create_model()
         print("   - XGBoost 모델 학습. 10 라운드마다 진행 로그가 표시됩니다.")
         self.model.fit(
-            X_train_scaled, 
+            X_train_scaled,
             y_train,
             eval_set=[(X_val_scaled, y_val)],
             verbose=10
@@ -136,7 +137,9 @@ class LottoNumberPredictor:
                 print(f"   {feat}: {importance:.4f}")
         
         print("\n✅ 학습 완료!")
-        
+
+        self.feature_version = feature_engineer.get_feature_version()
+
         return {
             'train_acc': train_acc,
             'val_acc': val_acc,
@@ -159,10 +162,16 @@ class LottoNumberPredictor:
         """
         if self.model is None:
             raise RuntimeError("모델이 학습되지 않았습니다. train()을 먼저 실행하세요.")
-        
+
+        current_feature_version = feature_engineer.get_feature_version()
+        if self.feature_version and self.feature_version != current_feature_version:
+            raise ValueError(
+                "학습된 모델의 피처 버전이 현재 데이터 스키마와 일치하지 않습니다. 모델을 다시 학습해주세요."
+            )
+
         if draw_no is None:
             draw_no = feature_engineer.get_latest_draw_number() + 1
-        
+
         # 피처 추출
         features_df = feature_engineer.extract_number_features(draw_no)
         
@@ -175,14 +184,26 @@ class LottoNumberPredictor:
         # 범주형 변수 인코딩 (학습시와 동일하게)
         if 'range_group' in X.columns:
             X = pd.get_dummies(X, columns=['range_group'], prefix='range')
-        
-        # 학습시 사용한 모든 컬럼 맞추기
-        for col in self.feature_names:
-            if col not in X.columns:
-                X[col] = 0
-        
+
+        current_columns = set(X.columns)
+        missing_features = [col for col in self.feature_names if col not in current_columns]
+
+        # range_* 피처는 범주가 등장하지 않아도 0으로 추가해도 안전하다.
+        safe_fill_features = [col for col in missing_features if col.startswith('range_')]
+        for col in safe_fill_features:
+            X[col] = 0
+
+        remaining_missing = [col for col in missing_features if col not in safe_fill_features]
+        if remaining_missing:
+            preview = ', '.join(remaining_missing[:5])
+            if len(remaining_missing) > 5:
+                preview += ', ...'
+            raise ValueError(
+                f"모델이 사용하는 피처({preview})를 현재 데이터에서 찾을 수 없습니다. 모델을 다시 학습해주세요."
+            )
+
         X = X[self.feature_names]
-        
+
         # 스케일링
         X_scaled = self.scaler.transform(X)
         
@@ -318,28 +339,35 @@ class LottoNumberPredictor:
             'scaler': self.scaler,
             'feature_names': self.feature_names,
             'feature_importance': self.feature_importance,
-            'model_type': self.model_type
+            'model_type': self.model_type,
+            'feature_version': self.feature_version
         }
-        
+
         with open(path, 'wb') as f:
             pickle.dump(save_data, f)
-        
+
         print(f"✅ 모델 저장 완료: {path}")
-    
-    def load_model(self, path='models/number_predictor.pkl'):
+
+    def load_model(self, path='models/number_predictor.pkl', expected_feature_version=None):
         """모델 로드"""
         if not Path(path).exists():
             raise FileNotFoundError(f"모델 파일을 찾을 수 없습니다: {path}")
-        
+
         with open(path, 'rb') as f:
             save_data = pickle.load(f)
-        
+
         self.model = save_data['model']
         self.scaler = save_data['scaler']
         self.feature_names = save_data['feature_names']
         self.feature_importance = save_data.get('feature_importance', {})
         self.model_type = save_data.get('model_type', 'unknown')
-        
+        self.feature_version = save_data.get('feature_version')
+
+        if expected_feature_version and self.feature_version != expected_feature_version:
+            raise ValueError(
+                f"저장된 모델 피처 버전({self.feature_version})과 현재 버전({expected_feature_version})이 다릅니다."
+            )
+
         print(f"✅ 모델 로드 완료: {path}")
     
     def get_feature_importance(self, top_k=20):
