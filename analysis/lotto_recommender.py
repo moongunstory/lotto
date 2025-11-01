@@ -147,8 +147,16 @@ class LottoRecommender:
 
         return True
 
-    def generate_numbers(self, count=5, include_numbers=None, max_attempts=10000):
-        """필터를 만족하는 랜덤 번호 추천 생성"""
+    def generate_numbers(self, count=5, include_numbers=None, max_attempts=10000, max_overlap=6):
+        """
+        필터를 만족하는 랜덤 번호 추천 생성 (조합 간 중복 제어 기능 추가)
+        
+        Args:
+            count: 생성할 조합 개수
+            include_numbers: 포함할 번호 목록
+            max_attempts: 최대 시도 횟수
+            max_overlap: 조합 간 최대 허용 중복 번호 개수
+        """
         recommendations = []
         attempts = 0
         
@@ -170,7 +178,19 @@ class LottoRecommender:
             else:
                 numbers = sorted(random.sample(range(1, 46), 6))
             
-            if self.apply_filters(numbers, include_numbers):
+            # 필터 적용
+            if not self.apply_filters(numbers, include_numbers):
+                continue
+
+            # 조합 간 중복 체크
+            is_overlapped = False
+            if max_overlap < 6:
+                for r in recommendations:
+                    if len(set(numbers) & set(r)) > max_overlap:
+                        is_overlapped = True
+                        break
+            
+            if not is_overlapped:
                 recommendations.append(numbers)
         
         if len(recommendations) < count:

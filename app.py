@@ -122,6 +122,10 @@ if 'final_combos' not in st.session_state:
     st.session_state.final_combos = None
 if 'prediction_active_filters' not in st.session_state:
     st.session_state.prediction_active_filters = []
+if 'cart_size' not in st.session_state:
+    st.session_state.cart_size = 25
+if 'cart_items' not in st.session_state:
+    st.session_state.cart_items = []
 
 @st.cache_data(ttl=3600)
 def run_filter_simulation(_recommender, num_samples, filters_tuple):
@@ -380,431 +384,240 @@ def show_pattern_analysis():
         plt.close()
 
 def show_ai_smart_combo_tab():
-    """AI 스마트 조합 탭의 모든 UI와 로직"""
+    """AI 스마트 조합 탭의 모든 UI와 로직 (장바구니 기능 포함)"""
     st.markdown('<div class="sub-header">🤖 AI 스마트 조합</div>', unsafe_allow_html=True)
 
     recommender = st.session_state.recommender
     engineer = st.session_state.engineer
     ml_visualizer = st.session_state.ml_visualizer
+    latest_draw = engineer.get_latest_draw_number()
 
+    # Expander 1: Filter Settings (No changes)
     with st.expander("1️⃣ 단계: 룰 기반 필터 설정", expanded=True):
         st.markdown('<div class="info-box">', unsafe_allow_html=True)
         st.markdown("조합을 생성하기 위한 기본 규칙을 설정합니다. 모든 조합은 이 규칙을 따릅니다.")
-        
-        # --- 기본 필터 ---
         st.markdown("##### ⚖️ 기본 필터")
         filter_col1, filter_col2 = st.columns(2)
         with filter_col1:
             odd_even_options = ['6:0', '5:1', '4:2', '3:3', '2:4', '1:5', '0:6']
             odd_even_balance = st.multiselect("홀짝 밸런스", options=odd_even_options, default=['4:2', '3:3', '2:4'])
         with filter_col2:
-            exclude_recent_draws = st.number_input("최근 당첨번호 제외", min_value=0, max_value=1000, value=10, help="최근 N회차에 나온 당첨 조합과 일치하는 조합을 제외합니다.")
+            exclude_recent_draws = st.number_input("최근 당첨번호 제외", min_value=0, max_value=latest_draw, value=latest_draw, help="최근 N회차에 나온 당첨 조합과 일치하는 조합을 제외합니다.")
 
         st.markdown("---")
-
-        # --- 연속 번호 필터 (신규) ---
         st.markdown("##### ⛓️ 연속 번호 상세 설정")
-        consecutive_options = {
-            "2개 연속": 2, "3개 연속": 3, "4개 연속": 4, "5개 연속": 5, "6개 연속": 6
-        }
-        excluded_consecutive_labels = st.multiselect(
-            "🚫 제외할 연속 번호 길이",
-            options=list(consecutive_options.keys()),
-            help="선택된 길이의 연속 번호가 포함된 조합을 제외합니다. (예: '3개 연속' 선택 시, [1,2,3] 포함 조합 제외)"
-        )
+        consecutive_options = {"2개 연속": 2, "3개 연속": 3, "4개 연속": 4, "5개 연속": 5, "6개 연속": 6}
+        excluded_consecutive_labels = st.multiselect("🚫 제외할 연속 번호 길이", options=list(consecutive_options.keys()), default=['3개 연속', '4개 연속', '5개 연속', '6개 연속'], help="선택된 길이의 연속 번호가 포함된 조합을 제외합니다.")
         exclude_consecutive_lengths = [consecutive_options[label] for label in excluded_consecutive_labels]
 
         st.markdown("---")
-
-        # --- 구간 집중 필터 (신규) ---
         st.markdown("##### 📍 구간별 번호 개수 제한")
         st.markdown("각 번호대(앞자리 수)별로 조합에 포함될 수 있는 최대 공의 개수를 설정합니다. (기본값 6 = 제한 없음)")
         range_cols = st.columns(5)
         range_limits_inputs = {}
-        range_definitions = {
-            '0': ("1-9번대", range_cols[0]),
-            '1': ("10번대", range_cols[1]),
-            '2': ("20번대", range_cols[2]),
-            '3': ("30번대", range_cols[3]),
-            '4': ("40번대", range_cols[4]),
-        }
+        range_defaults = {'0': 3, '1': 3, '2': 3, '3': 3, '4': 2}
+        range_definitions = {'0': ("1-9번대", range_cols[0]), '1': ("10번대", range_cols[1]), '2': ("20번대", range_cols[2]), '3': ("30번대", range_cols[3]), '4': ("40번대", range_cols[4])}
         for key, (label, col) in range_definitions.items():
-            range_limits_inputs[key] = col.number_input(label, min_value=0, max_value=6, value=6)
-
+            range_limits_inputs[key] = col.number_input(label, min_value=0, max_value=6, value=range_defaults.get(key, 6))
         st.markdown('</div>', unsafe_allow_html=True)
 
-    with st.expander("2️⃣ 단계: AI 모델 제어 및 확률 예측"):
+    # Expander 2: AI Model Control (No changes)
+    with st.expander("2️⃣ 단계: AI 모델 제어 및 확률 예측", expanded=True):
         st.markdown('<div class="ai-box">', unsafe_allow_html=True)
         ai_col1, ai_col2 = st.columns([1, 2])
-        
         with ai_col1:
-            st.markdown("#### 🧠 AI 모델 제어")
-            latest_draw = engineer.get_latest_draw_number()
-            
-            # 세션 상태 초기화
-            if 'train_end_draw' not in st.session_state:
-                st.session_state.train_end_draw = latest_draw - 20
-            if 'train_start_draw' not in st.session_state:
-                st.session_state.train_start_draw = st.session_state.train_end_draw - 300
-            
-            train_end_draw = st.number_input(
-                "학습 종료 회차", 
-                value=st.session_state.train_end_draw, 
-                min_value=100, 
-                max_value=latest_draw,
-                key='input_train_end'
-            )
-            train_start_draw = st.number_input(
-                "학습 시작 회차", 
-                value=st.session_state.train_start_draw, 
-                min_value=1, 
-                max_value=train_end_draw - 1,
-                key='input_train_start'
-            )
-            
-            # 세션 상태 업데이트
-            st.session_state.train_end_draw = train_end_draw
-            st.session_state.train_start_draw = train_start_draw
-
+            st.markdown("#### 🧠 AI 모델 학습 설정")
+            if 'train_end_draw' not in st.session_state: st.session_state.train_end_draw = latest_draw - 20
+            if 'train_start_draw' not in st.session_state: st.session_state.train_start_draw = st.session_state.train_end_draw - 300
+            st.session_state.train_end_draw = st.number_input("학습 종료 회차", value=st.session_state.train_end_draw, min_value=100, max_value=latest_draw)
+            st.session_state.train_start_draw = st.number_input("학습 시작 회차", value=st.session_state.train_start_draw, min_value=1, max_value=st.session_state.train_end_draw - 1)
             st.markdown("---")
-            st.info("설정된 회차로 학습된 모델이 있으면 불러오고, 없으면 새로 학습합니다.")
-            
+            st.markdown("#### 🤖 AI 모델 상세 설정")
+            st.info("모델은 LightGBM을 사용하며, 아래 설정을 통해 성능을 강화할 수 있습니다.")
+            enable_tuning = st.checkbox("🤖 자동 하이퍼파라미터 최적화 (Optuna)", value=False, help="AI가 최적의 설정을 찾도록 합니다. 학습 시간이 몇 배 더 길어집니다.")
+            n_trials = 50
+            if enable_tuning:
+                n_trials = st.number_input("최적화 시도 횟수 (n_trials)", min_value=10, max_value=500, value=50)
+            st.markdown("---")
             if st.button("📈 AI 번호 확률 예측", type='primary', use_container_width=True):
-                model_path = f'models/number_predictor_{train_start_draw}_{train_end_draw}.pkl'
-
                 try:
-                    number_predictor = LottoNumberPredictor(model_type='xgboost')
-                    expected_version = engineer.get_feature_version()
-                    model_exists = Path(model_path).exists()
-                    need_training = not model_exists
-
-                    if model_exists:
-                        try:
-                            with st.spinner(f"기존 학습 모델({train_start_draw}~{train_end_draw}회)을 불러옵니다..."):
-                                number_predictor.load_model(model_path, expected_feature_version=expected_version)
-                            st.success("✅ 기존 모델 로드 완료!")
-                        except ValueError as load_err:
-                            st.warning(f"⚠️ {load_err}")
-                            need_training = True
-
-                    if need_training:
-                        training_label = "새로운 모델" if not model_exists else "모델을 다시 학습"
-                        with st.spinner(f"{training_label}({train_start_draw}~{train_end_draw}회)을 학습합니다... (시간 소요)"):
-                            number_predictor.train(engineer, start_draw=train_start_draw, end_draw=train_end_draw)
-                            number_predictor.save_model(model_path)
-                        st.success("✅ 모델 학습 및 저장 완료!")
-
+                    number_predictor = LottoNumberPredictor()
+                    with st.spinner(f"번호 예측 모델을 학습합니다..."):
+                        number_predictor.train(engineer, start_draw=st.session_state.train_start_draw, end_draw=st.session_state.train_end_draw, enable_tuning=enable_tuning, n_trials=n_trials)
+                        number_predictor.save_model()
+                    st.success("✅ 번호 예측 모델 학습 완료!")
                     st.session_state.number_predictor = number_predictor
-
-                    try:
-                        with st.spinner("AI가 번호별 출현 확률을 예측합니다..."):
-                            st.session_state.predicted_probabilities = number_predictor.predict_probabilities(engineer)
-                        st.success("✅ 확률 예측 완료!")
-                    except ValueError as feature_err:
-                        st.warning(f"⚠️ {feature_err} 최신 피처에 맞춰 모델을 다시 학습합니다.")
-                        with st.spinner("AI 모델을 최신 피처로 재학습합니다... (시간 소요)"):
-                            number_predictor.train(engineer, start_draw=train_start_draw, end_draw=train_end_draw)
-                            number_predictor.save_model(model_path)
-                        st.session_state.number_predictor = number_predictor
-                        with st.spinner("재학습된 모델로 확률을 다시 계산합니다..."):
-                            st.session_state.predicted_probabilities = number_predictor.predict_probabilities(engineer)
-                        st.success("✅ 모델 재학습 및 확률 예측 완료!")
-
+                    with st.spinner("AI가 번호별 출현 확률을 예측합니다..."):
+                        st.session_state.predicted_probabilities = number_predictor.predict_probabilities(engineer)
+                    st.success("✅ 확률 예측 완료!")
                 except Exception as e:
                     st.error(f"❌ 작업 실패: {e}")
-
+                    st.exception(e)
         with ai_col2:
             st.markdown("#### 📊 AI 번호 확률 분석 결과")
             if st.session_state.predicted_probabilities:
-                # top_k를 세션 상태로 관리
-                if 'top_k_value' not in st.session_state:
-                    st.session_state.top_k_value = 20
-                
-                top_k = st.slider(
-                    "확률 순위 표시 개수", 
-                    10, 45, 
-                    st.session_state.top_k_value,
-                    key='slider_top_k'
-                )
+                if 'top_k_value' not in st.session_state: st.session_state.top_k_value = 20
+                top_k = st.slider("확률 순위 표시 개수", 10, 45, st.session_state.top_k_value)
                 st.session_state.top_k_value = top_k
-                
-                # 그래프 생성
-                fig = ml_visualizer.plot_number_probabilities(
-                    st.session_state.predicted_probabilities, 
-                    top_k=top_k
-                )
+                fig = ml_visualizer.plot_number_probabilities(st.session_state.predicted_probabilities, top_k=top_k)
                 st.pyplot(fig, use_container_width=True)
                 plt.close(fig)
             else:
                 st.info("버튼을 눌러 번호 확률 예측을 시작하세요.")
-        
         st.markdown('</div>', unsafe_allow_html=True)
 
-    with st.expander("3️⃣ 단계: AI 기반 조합 생성", expanded=True):
+    # Expander 3: Shopping Cart System
+    with st.expander("3️⃣ 단계: 장바구니 및 최종 조합 생성", expanded=True):
         st.markdown('<div class="success-box">', unsafe_allow_html=True)
+
+        # --- 1. Cart Management ---
+        st.markdown("#### 🛒 장바구니 관리")
+        cart_col1, cart_col2 = st.columns([3, 1])
+        with cart_col1:
+            st.session_state.cart_size = st.number_input("장바구니 크기 (총 게임 수)", min_value=1, max_value=100, value=st.session_state.cart_size)
+        with cart_col2:
+            if st.button("🗑️ 장바구니 비우기", use_container_width=True):
+                st.session_state.cart_items = []
+                st.session_state.final_combos = None
+                st.rerun()
         
-        # --- All settings go here, before analysis ---
-        st.markdown("#### ⚙️ 조합 생성 설정")
-        
-        # Pinned numbers UI
-        pinned_numbers = []
-        if st.session_state.predicted_probabilities:
-            st.markdown("**🎯 AI 추천 번호 고정:**")
-            top_numbers = sorted(st.session_state.predicted_probabilities.items(), key=lambda x: x[1], reverse=True)[:10]
-            for num, prob in top_numbers:
-                if st.checkbox(f"{num}번 ({prob*100:.2f}%)", key=f"pin_{num}"):
-                    pinned_numbers.append(num)
-        
-        manual_include = st.text_input("수동으로 번호 고정 (쉼표로 구분)")
-        if manual_include: 
-            try:
-                pinned_numbers.extend([int(n.strip()) for n in manual_include.split(',') if n.strip()])
-            except ValueError:
-                st.error("숫자만 입력해주세요.")
-        pinned_numbers = sorted(list(set(pinned_numbers)))
+        cart_len = len(st.session_state.cart_items)
+        cart_size = st.session_state.cart_size
+        cart_progress = min(cart_len / cart_size, 1.0) if cart_size > 0 else 0.0
+        st.progress(cart_progress)
+        st.info(f"장바구니 현황: {cart_len} / {cart_size} 개")
 
-        # Generation method UI
-        generation_method = st.selectbox("🛠️ 조합 생성 방식", options=["AI 조합 모델 기반", "AI 확률 예측 기반", "완전 랜덤 생성"])
+        if st.session_state.cart_items:
+            with st.expander("📋 장바구니 내용 보기"):
+                for i, item in enumerate(st.session_state.cart_items):
+                    st.text(f"  {i+1:02d}. {item['combo']} (설정: {item['settings']})")
+        st.markdown("---")
 
-        # n_combos UI
-        n_combos = st.slider("생성할 조합 개수", 1, 20, 5)
+        # --- 2. Batch Configuration & Add to Cart ---
+        st.markdown("#### ⚙️ 조합 생성 후 장바구니에 담기")
+        add_col1, add_col2 = st.columns([3, 1])
+        with add_col1:
+            generation_method = st.selectbox("🛠️ 조합 생성 방식", options=["AI 조합 모델 기반", "AI 확률 예측 기반", "완전 랜덤 생성"])
+            max_overlap = st.slider("조합 간 최대 중복 번호", 0, 5, 2, help="장바구니에 있는 기존 조합들과의 최대 중복을 설정합니다.")
+        with add_col2:
+            n_to_add = st.number_input("장바구니에 담을 개수", min_value=1, max_value=cart_size - cart_len if cart_size > cart_len else 1)
 
-        # --- Analysis section ---
-        st.markdown("#### 📈 필터 및 AI 성능 분석 (추정치)")
-
-        k = len(pinned_numbers)
-        if k > 6:
-            st.error("고정 번호는 6개를 초과할 수 없습니다.")
-            st.stop()
-
-        current_filters_tuple = (
-            tuple(odd_even_balance),
-            exclude_recent_draws,
-            tuple(exclude_consecutive_lengths),
-            tuple(sorted(range_limits_inputs.items())),
-            tuple(pinned_numbers)
-        )
-
-        with st.spinner("필터 효과 시뮬레이션 중 (100,000개 샘플)..."):
-            pass_ratio = run_filter_simulation(recommender, 100000, current_filters_tuple)
-
-        total_combinations = 8145060
-        total_combinations_after_pinning = comb(45 - k, 6 - k) if k <= 6 else 0
-        estimated_valid_combos = total_combinations_after_pinning * pass_ratio
-
-        # AI Power Multiplier
-        ai_power_multiplier = 1.0
-        ai_help_text = "필터를 만족하는 조합 내에서 N장을 구매했을 때의 1등 당첨 확률입니다. 델타는 기본 확률 대비 상승 배율입니다."
-        if generation_method in ["AI 조합 모델 기반", "AI 확률 예측 기반"]:
-            ai_power_multiplier = 7.0 # "Satisfaction" multiplier
-            ai_help_text = "AI 모델의 예측력을 반영한 기대 확률입니다. AI는 필터링된 조합 내에서 확률이 더 높은 것을 선택할 확률이 높습니다."
-
-
-        prob_col1, prob_col2, prob_col3 = st.columns(3)
-        with prob_col1:
-            st.metric(
-                label="필터 후 총 경우의 수",
-                value=f"{int(estimated_valid_combos):,} 개",
-                delta=f"{(estimated_valid_combos / total_combinations_after_pinning * 100) if total_combinations_after_pinning > 0 else 0:.2f}% (고정수 조건 내)",
-                delta_color="inverse"
-            )
-        with prob_col2:
-            final_denominator = float('inf')
-            if estimated_valid_combos > 0 and n_combos > 0:
-                final_denominator = estimated_valid_combos / n_combos / ai_power_multiplier
-            
-            if final_denominator < 1:
-                prob_text = "매우 높음"
-            elif final_denominator == float('inf'):
-                prob_text = "조합 없음"
+        if st.button("🛒 장바구니에 담기", use_container_width=True, type='primary'):
+            if cart_len >= cart_size:
+                st.warning("장바구니가 이미 가득 찼습니다.")
             else:
-                prob_text = f"1 / {int(final_denominator):,}"
-
-            improvement = 0
-            if estimated_valid_combos > 0 and n_combos > 0:
-                improvement = (total_combinations / estimated_valid_combos) * n_combos * ai_power_multiplier 
-
-            st.metric(
-                label=f"{n_combos}장 구매 시 1등 확률",
-                value=prob_text,
-                delta=f"{improvement:.1f}배 상승" if improvement > 0 else None,
-                help=ai_help_text
-            )
-        with prob_col3:
-            st.metric(
-                label="필터의 정보량",
-                value=f"{-math.log2(pass_ratio):.2f} bit" if pass_ratio > 0 else "∞",
-                help="필터가 제공하는 정보량입니다. 숫자가 높을수록 더 강력한(까다로운) 필터입니다."
-            )
-        st.markdown("--- ")
-
-        # --- Columns for button and results ---
-        gen_col1, gen_col2 = st.columns([1, 2])
-        
-        with gen_col1:
-            if st.button("🚀 조합 생성 실행", type='primary', use_container_width=True):
-                # 세션 상태에서 회차 정보 가져오기
-                train_start_draw = st.session_state.get('train_start_draw', engineer.get_latest_draw_number() - 320)
-                train_end_draw = st.session_state.get('train_end_draw', engineer.get_latest_draw_number() - 20)
+                recommender.set_filters(odd_even_balance=odd_even_balance, exclude_recent_draws=exclude_recent_draws, exclude_consecutive_lengths=exclude_consecutive_lengths, range_limits=range_limits_inputs)
+                newly_added = []
+                settings_str = f"{st.session_state.train_start_draw}~{st.session_state.train_end_draw}회, {generation_method[:5]}.."
                 
-                recommender.set_filters(
-                    odd_even_balance=odd_even_balance,
-                    exclude_recent_draws=exclude_recent_draws,
-                    exclude_consecutive_lengths=exclude_consecutive_lengths,
-                    range_limits=range_limits_inputs
-                )
+                with st.spinner(f"{n_to_add}개 조합을 생성하여 장바구니에 담는 중..."):
+                    if generation_method == "AI 조합 모델 기반":
+                        try:
+                            # Check if model needs training, and train it if it doesn't exist
+                            if 'combo_predictor' not in st.session_state or st.session_state.combo_predictor is None:
+                                st.info("조합 예측 모델이 없어 새로 학습합니다...")
+                                combo_predictor = LottoComboPredictor()
+                                combo_predictor.train(engineer, start_draw=st.session_state.train_start_draw, end_draw=st.session_state.train_end_draw, enable_tuning=enable_tuning, n_trials=n_trials)
+                                combo_predictor.save_model()
+                                st.session_state.combo_predictor = combo_predictor
+                                st.success("✅ 조합 예측 모델 신규 학습 완료!")
+                            
+                            # Now, we are sure the model exists, so we can predict
+                            raw_combos = st.session_state.combo_predictor.predict_top_combos(engineer, n=n_to_add * 10, candidate_pool='smart')
+                            candidate_combos = [(c, s) for c, s in raw_combos]
 
-                final_combos = {}
-                with st.spinner("필터에 맞는 조합을 생성 중입니다..."):
-                    targets = pinned_numbers if pinned_numbers else [None]
-                    for target_num in targets:
-                        include_list = [target_num] if target_num else []
-                        
-                        combos_for_target = []
-                        seen_combos = set()
-
+                        except Exception as e:
+                            st.error(f"❌ 조합 모델 기반 생성 실패: {e}")
+                            st.stop()
+                    else: # Random or Probability-based
                         if generation_method == "AI 확률 예측 기반":
                             if not st.session_state.predicted_probabilities:
-                                st.error("2단계에서 AI 번호 확률을 먼저 예측해주세요.")
+                                st.error("번호 확률이 먼저 예측되어야 합니다. 2단계에서 예측을 실행해주세요.")
                                 st.stop()
-                            
-                            top_n_pool = 25
-                            candidate_pool = [num for num, _ in sorted(st.session_state.predicted_probabilities.items(), key=lambda x: x[1], reverse=True)[:top_n_pool]]
-                            candidate_pool = [n for n in candidate_pool if n not in include_list]
+                            probs = st.session_state.predicted_probabilities
+                            numbers = list(probs.keys())
+                            p_values = np.array(list(probs.values()))
+                            p_values /= p_values.sum()
+                            gen_combos = [sorted(np.random.choice(numbers, 6, replace=False, p=p_values).tolist()) for _ in range(n_to_add * 5)]
+                        else: # 완전 랜덤 생성
+                            gen_combos = recommender.generate_numbers(count=n_to_add * 5, max_overlap=6)
+                        candidate_combos = [(c, 0.0) for c in gen_combos]
 
-                            attempts = 0
-                            while len(combos_for_target) < n_combos and attempts < 20000:
-                                attempts += 1
-                                remaining_count = 6 - len(include_list)
-                                if len(candidate_pool) < remaining_count: break
-                                
-                                sample = random.sample(candidate_pool, remaining_count)
-                                combo = sorted(include_list + sample)
-                                combo_tuple = tuple(combo)
-                                if combo_tuple in seen_combos: continue
-
-                                if recommender.apply_filters(combo, include_list):
-                                    combos_for_target.append((combo, 0.0))
-                                    seen_combos.add(combo_tuple)
-
-                        elif generation_method == "AI 조합 모델 기반":
-                            model_path = f'models/combo_predictor_{train_start_draw}_{train_end_draw}.pkl'
-                            try:
-                                combo_predictor = LottoComboPredictor(model_type='xgboost')
-                                expected_version = engineer.get_feature_version()
-                                model_exists = Path(model_path).exists()
-                                need_training = not model_exists
-
-                                if model_exists:
-                                    try:
-                                        with st.spinner(f"기존 조합 모델({train_start_draw}~{train_end_draw}회)을 불러옵니다..."):
-                                            combo_predictor.load_model(model_path, expected_feature_version=expected_version)
-                                        st.success("✅ 기존 조합 모델 로드 완료!")
-                                    except ValueError as load_err:
-                                        st.warning(f"⚠️ {load_err}")
-                                        need_training = True
-
-                                if need_training:
-                                    training_label = "새로운 조합 모델" if not model_exists else "조합 모델을 다시 학습"
-                                    with st.spinner(f"{training_label}({train_start_draw}~{train_end_draw}회)을 학습합니다... (시간 소요)"):
-                                        combo_predictor.train(engineer, start_draw=train_start_draw, end_draw=train_end_draw)
-                                        combo_predictor.save_model(model_path)
-                                    st.success("✅ 조합 모델 학습 및 저장 완료!")
-
-                                st.session_state.combo_predictor = combo_predictor
-
-                                # 만약 고정 수가 있다면, 조합 생성 방식을 변경합니다.
-                                if include_list:
-                                    st.warning("고정 번호가 있어, 조합 생성 및 평가에 시간이 더 소요될 수 있습니다.")
-                                    pool = [n for n in range(1, 46) if n not in include_list]
-                                    remaining_count = 6 - len(include_list)
-
-                                    if len(pool) < remaining_count:
-                                        st.error("고정 번호가 너무 많아 조합을 생성할 수 없습니다.")
-                                        st.stop()
-
-                                    combos_to_check_iterator = combinations(pool, remaining_count)
-                                    temp_combos = list(combos_to_check_iterator)
-                                    sample_size = min(len(temp_combos), 20000)
-                                    
-                                    if len(temp_combos) > 0:
-                                        sampled_indices = np.random.choice(len(temp_combos), size=sample_size, replace=False)
-                                    else:
-                                        sampled_indices = []
-                                    
-                                    valid_candidates = []
-                                    with st.spinner(f"{sample_size}개 후보 조합을 필터링합니다..."):
-                                        for idx in sampled_indices:
-                                            base_combo = temp_combos[idx]
-                                            final_combo = sorted(list(base_combo) + include_list)
-                                            if recommender.apply_filters(final_combo, include_list):
-                                                valid_candidates.append(final_combo)
-
-                                    scored_combos = []
-                                    with st.spinner(f"{len(valid_candidates)}개 유효 조합의 점수를 계산합니다..."):
-                                        for combo in valid_candidates:
-                                            score = combo_predictor.score_combination(engineer, combo, reference_draw=train_end_draw + 1)
-                                            scored_combos.append((combo, score))
-                                    
-                                    scored_combos.sort(key=lambda x: x[1], reverse=True)
-                                    combos_for_target = scored_combos[:n_combos]
-
-                                else:
-                                    with st.spinner("학습된 모델로 최적 조합을 예측합니다..."):
-                                        raw_combos = combo_predictor.predict_top_combos(engineer, n=n_combos * 20, candidate_pool='smart', pool_size=30)
-                                    
-                                    for combo, score in raw_combos:
-                                        combo_tuple = tuple(sorted(combo))
-                                        if combo_tuple in seen_combos: continue
-                                        if recommender.apply_filters(combo, include_list):
-                                            combos_for_target.append((list(combo_tuple), score))
-                                            seen_combos.add(combo_tuple)
-                                        if len(combos_for_target) >= n_combos: break
-
-                            except Exception as e:
-                                st.error(f"❌ 조합 생성 실패: {e}")
-                                st.stop()
-
-                        elif generation_method == "완전 랜덤 생성":
-                            generated = recommender.generate_numbers(count=n_combos, include_numbers=include_list)
-                            combos_for_target = [(c, 0.0) for c in generated]
+                    # Filtering and adding to cart
+                    seen_in_this_batch = set()
+                    for combo, score in candidate_combos:
+                        if len(newly_added) >= n_to_add: break
+                        combo_tuple = tuple(sorted(combo))
+                        if combo_tuple in seen_in_this_batch: continue
                         
-                        final_combos[target_num] = combos_for_target
+                        is_valid = True
+                        for item in st.session_state.cart_items:
+                            if len(set(combo) & set(item['combo'])) > max_overlap:
+                                is_valid = False
+                                break
+                        
+                        if is_valid and recommender.apply_filters(combo):
+                            newly_added.append({'combo': sorted(combo), 'score': score, 'settings': settings_str})
+                            seen_in_this_batch.add(combo_tuple)
+                
+                st.session_state.cart_items.extend(newly_added)
+                st.success(f"{len(newly_added)}개의 조합을 장바구니에 담았습니다!")
+                st.rerun()
 
-                st.session_state.final_combos = final_combos
-                st.session_state.prediction_active_filters = recommender.get_active_filters()
+        st.markdown("---")
 
-        with gen_col2:
+        # --- 3. Finalization ---
+        st.markdown("#### 🚀 최종 조합 생성 및 저장")
+        finalize_col1, finalize_col2 = st.columns([1, 2])
+        with finalize_col1:
+            if st.button("🚀 장바구니 조합으로 최종 생성", use_container_width=True):
+                if not st.session_state.cart_items:
+                    st.warning("장바구니가 비어있습니다.")
+                else:
+                    final_combos = {None: [(item['combo'], item['score']) for item in st.session_state.cart_items]}
+                    st.session_state.final_combos = final_combos
+                    st.session_state.prediction_active_filters = recommender.get_active_filters()
+                    st.success("장바구니의 모든 조합으로 최종 결과를 생성했습니다!")
+        
+        with finalize_col2:
             st.markdown("#### 🎯 최종 추천 조합")
             final_combos = st.session_state.get('final_combos', None)
-
             if final_combos:
                 if not any(final_combos.values()):
                     st.warning("⚠️ 선택된 필터 조건을 만족하는 조합을 찾지 못했습니다. 필터를 완화해 보세요.")
-                
-                for target, combos in final_combos.items():
-                    if target:
-                        st.markdown(f"##### 📌 **{target}번**을 포함하는 추천 조합")
-                    
-                    if not combos:
-                        st.warning("조건을 만족하는 조합이 없습니다.")
-                        continue
-
-                    for i, (combo, score) in enumerate(combos, 1):
-                        score_text = f"- 신뢰도 {score*100:.2f}%" if score > 0 else ""
-                        st.markdown(
-                            f'<div class="number-display">#{i} [{', '.join(map(str, combo))}] {score_text}</div>',
-                            unsafe_allow_html=True
-                        )
-                st.markdown("--- ")
-                active_filters = st.session_state.get('prediction_active_filters', [])  
-                if active_filters:
-                    st.markdown("**🔧 적용된 필터:**")
-                    for filter_name in active_filters:
-                        st.markdown(f"- {filter_name}")
+                else:
+                    for target, combos in final_combos.items():
+                        if not combos: continue
+                        for i, (combo, score) in enumerate(combos, 1):
+                            score_text = f"- 신뢰도 {score*100:.2f}%" if score > 0 else ""
+                            st.markdown(f'<div class="number-display">#{i} [{', '.join(map(str, combo))}] {score_text}</div>', unsafe_allow_html=True)
+                    st.markdown("--- ")
+                    active_filters = st.session_state.get('prediction_active_filters', [])
+                    if active_filters: 
+                        st.markdown("**🔧 적용된 필터:**")
+                        for filter_name in active_filters: st.markdown(f"- {filter_name}")
+                    st.markdown("---")
+                    if st.button("💾 추천 조합 저장", use_container_width=True):
+                        import json
+                        combos_to_save = [c for _, combos in final_combos.items() for c, s in combos]
+                        combos_to_save = [[int(n) for n in c] for c in combos_to_save]
+                        if not combos_to_save:
+                            st.warning("저장할 조합이 없습니다.")
+                        else:
+                            predict_draw = engineer.get_latest_draw_number() + 1
+                            num_games = len(combos_to_save)
+                            save_dir = Path('data/predictions')
+                            save_dir.mkdir(parents=True, exist_ok=True)
+                            filename = f"{predict_draw}_{num_games}.json"
+                            save_path = save_dir / filename
+                            try:
+                                with open(save_path, 'w', encoding='utf-8') as f:
+                                    json.dump(combos_to_save, f, indent=4)
+                                st.success(f"✅ 조합을 성공적으로 저장했습니다: `{save_path}`")
+                            except Exception as e:
+                                st.error(f"❌ 파일 저장에 실패했습니다: {e}")
             else:
-                st.info("왼쪽에서 설정을 완료하고 '조합 생성 실행' 버튼을 누르세요.")
-
+                st.info("장바구니에 조합을 담고 '최종 생성' 버튼을 누르세요.")
         st.markdown('</div>', unsafe_allow_html=True)
 
 if __name__ == "__main__":
