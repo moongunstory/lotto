@@ -21,10 +21,13 @@ class LottoFetcher:
     def fetch_draw(self, draw_no):
         """특정 회차 데이터 가져오기"""
         try:
-            response = requests.get(f"{self.base_url}{draw_no}", timeout=10)
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3'
+            }
+            response = requests.get(f"{self.base_url}{draw_no}", headers=headers, timeout=10)
             data = response.json()
             
-            if data['returnValue'] == 'success':
+            if data.get('returnValue') == 'success':
                 return {
                     'draw_no': draw_no,
                     'date': data['drwNoDate'],

@@ -64,12 +64,12 @@ def main():
     fetcher = LottoFetcher()
     winning_data = fetcher.fetch_draw(draw_no)
 
-    if not winning_data or winning_data.get('returnValue') != 'success':
+    if not winning_data:
         print(f"❌ {draw_no}회차 당첨번호를 조회할 수 없습니다. 회차 번호를 확인해주세요.")
         return
 
-    winning_numbers = {winning_data[f'drwtNo{i}'] for i in range(1, 7)}
-    bonus_number = winning_data['bnusNo']
+    winning_numbers = {winning_data[f'n{i}'] for i in range(1, 7)}
+    bonus_number = winning_data['bonus']
     
     print("---")
     print(f"🎯 {draw_no}회 당첨번호: {sorted(list(winning_numbers))}")
