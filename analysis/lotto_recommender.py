@@ -147,18 +147,20 @@ class LottoRecommender:
 
         return True
 
-    def generate_numbers(self, count=5, include_numbers=None, max_attempts=10000, max_overlap=6):
+    def generate_numbers(self, count=5, include_numbers=None, max_attempts=10000, max_overlap=6, use_weighted_sampling=True):
         """
-        필터를 만족하는 랜덤 번호 추천 생성 (조합 간 중복 제어 기능 추가)
+        필터를 만족하는 랜덤 번호 추천 생성 (조합 간 중복 제어 및 번호 분산 기능 추가)
         
         Args:
             count: 생성할 조합 개수
             include_numbers: 포함할 번호 목록
             max_attempts: 최대 시도 횟수
             max_overlap: 조합 간 최대 허용 중복 번호 개수
+            use_weighted_sampling: 번호 사용 빈도에 따라 가중치를 부여하여 번호를 분산시킬지 여부
         """
         recommendations = []
         attempts = 0
+        number_counts = {n: 0 for n in range(1, 46)}
         
         if include_numbers:
             include_numbers = [int(n) for n in include_numbers if 1 <= int(n) <= 45]
@@ -170,13 +172,38 @@ class LottoRecommender:
         while len(recommendations) < count and attempts < max_attempts:
             attempts += 1
             
-            if include_numbers:
+            # 번호 생성
+            if use_weighted_sampling:
+                population = [n for n in range(1, 46) if n not in include_numbers]
+                weights = [1 / (number_counts[n] + 1) for n in population]
+                
                 remaining_count = 6 - len(include_numbers)
-                available_numbers = [n for n in range(1, 46) if n not in include_numbers]
-                remaining_numbers = random.sample(available_numbers, remaining_count)
+                
+                remaining_numbers = []
+                if remaining_count > 0:
+                    # 가중치 기반 샘플링 (비복원)
+                    current_population = list(population)
+                    current_weights = list(weights)
+                    
+                    for _ in range(remaining_count):
+                        if not current_population:
+                            break
+                        num = random.choices(current_population, weights=current_weights, k=1)[0]
+                        remaining_numbers.append(num)
+                        idx = current_population.index(num)
+                        current_population.pop(idx)
+                        current_weights.pop(idx)
+                
                 numbers = sorted(include_numbers + remaining_numbers)
-            else:
-                numbers = sorted(random.sample(range(1, 46), 6))
+
+            else: # 기존 랜덤 샘플링 방식
+                if include_numbers:
+                    remaining_count = 6 - len(include_numbers)
+                    available_numbers = [n for n in range(1, 46) if n not in include_numbers]
+                    remaining_numbers = random.sample(available_numbers, remaining_count)
+                    numbers = sorted(include_numbers + remaining_numbers)
+                else:
+                    numbers = sorted(random.sample(range(1, 46), 6))
             
             # 필터 적용
             if not self.apply_filters(numbers, include_numbers):
@@ -192,6 +219,9 @@ class LottoRecommender:
             
             if not is_overlapped:
                 recommendations.append(numbers)
+                # 사용된 번호 카운트 업데이트
+                for n in numbers:
+                    number_counts[n] += 1
         
         if len(recommendations) < count:
             print(f"⚠️ 필터 조건이 너무 엄격합니다. {len(recommendations)}개만 생성되었습니다.")

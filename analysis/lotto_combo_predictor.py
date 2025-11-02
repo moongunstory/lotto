@@ -123,24 +123,54 @@ class LottoComboPredictor:
         score = self.model.predict(X_scaled)[0]
         return float(np.clip(score, 0.0, 1.0))
 
-    def predict_top_combos(self, feature_engineer, n=10, candidate_pool='smart', pool_size=25, reference_draw=None):
+    def predict_top_combos(self, feature_engineer, number_probabilities, n=10, candidate_pool='smart', pool_size=25, reference_draw=None):
         if reference_draw is None: reference_draw = feature_engineer.get_latest_draw_number() + 1
         # ... (rest of the method is the same)
-        candidate_combos = self._generate_candidate_combos(feature_engineer, candidate_pool, pool_size, n)
+        candidate_combos = self._generate_candidate_combos(feature_engineer, number_probabilities, candidate_pool, pool_size, n)
         scored_combos = [(combo, self.score_combination(feature_engineer, combo, reference_draw)) for combo in candidate_combos]
         scored_combos.sort(key=lambda x: x[1], reverse=True)
         return scored_combos[:n]
 
-    def _generate_candidate_combos(self, feature_engineer, mode, pool_size, num_combos):
+    def _generate_candidate_combos(self, feature_engineer, number_probabilities, mode, pool_size, num_combos):
         if mode == 'smart':
-            recent_freq = feature_engineer.df.tail(50)[['n1','n2','n3','n4','n5','n6']].values.flatten()
-            unique, counts = np.unique(recent_freq, return_counts=True)
-            top_numbers = [num for num, count in sorted(zip(unique, counts), key=lambda x: x[1], reverse=True)[:pool_size]]
-            if len(top_numbers) < 6: return []
-            all_combos = list(combinations(top_numbers, 6))
-            sample_size = min(len(all_combos), 5000)
-            indices = np.random.choice(len(all_combos), size=sample_size, replace=False) if len(all_combos) > 0 else []
-            return [list(all_combos[i]) for i in indices]
+            if not number_probabilities:
+                # Fallback to the old method if probabilities are not provided
+                print("⚠️ 번호 확률 정보가 없어 기존 '핫 넘버' 방식으로 후보를 생성합니다.")
+                recent_freq = feature_engineer.df.tail(50)[['n1','n2','n3','n4','n5','n6']].values.flatten()
+                unique, counts = np.unique(recent_freq, return_counts=True)
+                top_numbers = [num for num, count in sorted(zip(unique, counts), key=lambda x: x[1], reverse=True)[:pool_size]]
+                if len(top_numbers) < 6: return []
+                all_combos = list(combinations(top_numbers, 6))
+                sample_size = min(len(all_combos), 5000)
+                indices = np.random.choice(len(all_combos), size=sample_size, replace=False) if len(all_combos) > 0 else []
+                return [list(all_combos[i]) for i in indices]
+
+            # New ideal logic using probabilities
+            numbers = list(number_probabilities.keys())
+            p_values = np.array(list(number_probabilities.values()))
+            
+            # Ensure probabilities sum to 1
+            p_sum = p_values.sum()
+            if p_sum == 0: # Avoid division by zero if all probs are 0
+                p_values = np.full(len(numbers), 1/len(numbers))
+            else:
+                p_values /= p_sum
+
+            # Generate a large number of candidates using weighted sampling
+            num_candidates_to_generate = num_combos * 20 
+            
+            # Use a set to store unique combinations to avoid duplicates during generation
+            candidate_set = set()
+            # Add a timeout to prevent infinite loops if it's hard to generate unique combos
+            max_gen_attempts = num_candidates_to_generate * 5
+            attempts = 0
+            while len(candidate_set) < num_candidates_to_generate and attempts < max_gen_attempts:
+                combo = tuple(sorted(np.random.choice(numbers, size=6, replace=False, p=p_values).tolist()))
+                candidate_set.add(combo)
+                attempts += 1
+            
+            return [list(c) for c in candidate_set]
+
         else: # random
             return [sorted(np.random.choice(range(1, 46), size=6, replace=False).tolist()) for _ in range(num_combos * 20)]
 

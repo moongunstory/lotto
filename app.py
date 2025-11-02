@@ -435,9 +435,9 @@ def show_ai_smart_combo_tab():
             st.markdown("#### 🤖 AI 모델 상세 설정")
             st.info("모델은 LightGBM을 사용하며, 아래 설정을 통해 성능을 강화할 수 있습니다.")
             enable_tuning = st.checkbox("🤖 자동 하이퍼파라미터 최적화 (Optuna)", value=False, help="AI가 최적의 설정을 찾도록 합니다. 학습 시간이 몇 배 더 길어집니다.")
-            n_trials = 50
+            n_trials = 500
             if enable_tuning:
-                n_trials = st.number_input("최적화 시도 횟수 (n_trials)", min_value=10, max_value=500, value=50)
+                n_trials = st.number_input("최적화 시도 횟수 (n_trials)", min_value=10, max_value=500, value=500)
             st.markdown("---")
             if st.button("📈 AI 번호 확률 예측", type='primary', use_container_width=True):
                 try:
@@ -511,54 +511,109 @@ def show_ai_smart_combo_tab():
                 settings_str = f"{st.session_state.train_start_draw}~{st.session_state.train_end_draw}회, {generation_method[:5]}.."
                 
                 with st.spinner(f"{n_to_add}개 조합을 생성하여 장바구니에 담는 중..."):
-                    if generation_method == "AI 조합 모델 기반":
-                        try:
-                            # Check if model needs training, and train it if it doesn't exist
-                            if 'combo_predictor' not in st.session_state or st.session_state.combo_predictor is None:
-                                st.info("조합 예측 모델이 없어 새로 학습합니다...")
-                                combo_predictor = LottoComboPredictor()
-                                combo_predictor.train(engineer, start_draw=st.session_state.train_start_draw, end_draw=st.session_state.train_end_draw, enable_tuning=enable_tuning, n_trials=n_trials)
-                                combo_predictor.save_model()
-                                st.session_state.combo_predictor = combo_predictor
-                                st.success("✅ 조합 예측 모델 신규 학습 완료!")
-                            
-                            # Now, we are sure the model exists, so we can predict
-                            raw_combos = st.session_state.combo_predictor.predict_top_combos(engineer, n=n_to_add * 10, candidate_pool='smart')
-                            candidate_combos = [(c, s) for c, s in raw_combos]
+                    # Using AI Combo Model now requires number probabilities to be predicted first
+                    if generation_method == "AI 조합 모델 기반" and not st.session_state.predicted_probabilities:
+                        st.error("AI 조합 모델을 사용하려면 먼저 2단계에서 'AI 번호 확률 예측'을 실행해야 합니다.")
+                        st.stop()
 
-                        except Exception as e:
-                            st.error(f"❌ 조합 모델 기반 생성 실패: {e}")
-                            st.stop()
-                    else: # Random or Probability-based
-                        if generation_method == "AI 확률 예측 기반":
-                            if not st.session_state.predicted_probabilities:
-                                st.error("번호 확률이 먼저 예측되어야 합니다. 2단계에서 예측을 실행해주세요.")
+                    attempts = 0
+                    max_attempts = 20 # Limit attempts to prevent infinite loops for very strict filters
+                    
+                    master_seen_combos = {tuple(item['combo']) for item in st.session_state.cart_items}
+
+                    while len(newly_added) < n_to_add and attempts < max_attempts:
+                        attempts += 1
+                        needed = n_to_add - len(newly_added)
+                        candidate_batch_size = max(needed * 5, 20)
+
+                        if generation_method == "AI 조합 모델 기반":
+                            try:
+                                if 'combo_predictor' not in st.session_state or st.session_state.combo_predictor is None:
+                                    st.info("조합 예측 모델이 없어 새로 학습합니다...")
+                                    combo_predictor = LottoComboPredictor()
+                                    combo_predictor.train(engineer, start_draw=st.session_state.train_start_draw, end_draw=st.session_state.train_end_draw, enable_tuning=enable_tuning, n_trials=n_trials)
+                                    st.session_state.combo_predictor = combo_predictor
+                                
+                                raw_combos = st.session_state.combo_predictor.predict_top_combos(
+                                    engineer,
+                                    st.session_state.predicted_probabilities,
+                                    n=candidate_batch_size * attempts,
+                                    candidate_pool='smart'
+                                )
+                                candidate_combos = [(c, s) for c, s in raw_combos]
+                            except Exception as e:
+                                st.error(f"❌ 조합 모델 기반 생성 실패: {e}")
                                 st.stop()
-                            probs = st.session_state.predicted_probabilities
-                            numbers = list(probs.keys())
-                            p_values = np.array(list(probs.values()))
-                            p_values /= p_values.sum()
-                            gen_combos = [sorted(np.random.choice(numbers, 6, replace=False, p=p_values).tolist()) for _ in range(n_to_add * 5)]
-                        else: # 완전 랜덤 생성
-                            gen_combos = recommender.generate_numbers(count=n_to_add * 5, max_overlap=6)
-                        candidate_combos = [(c, 0.0) for c in gen_combos]
+                        else: # Random or Probability-based
+                            if generation_method == "AI 확률 예측 기반":
+                                if not st.session_state.predicted_probabilities:
+                                    st.error("번호 확률이 먼저 예측되어야 합니다. 2단계에서 예측을 실행해주세요.")
+                                    st.stop()
+                                probs = st.session_state.predicted_probabilities
+                                numbers = list(probs.keys())
+                                p_values = np.array(list(probs.values()))
+                                p_values /= p_values.sum()
+                                gen_combos = [sorted(np.random.choice(numbers, 6, replace=False, p=p_values).tolist()) for _ in range(candidate_batch_size)]
+                            else: # 완전 랜덤 생성
+                                gen_combos = recommender.generate_numbers(count=candidate_batch_size, max_overlap=6)
+                            candidate_combos = [(c, 0.0) for c in gen_combos]
 
-                    # Filtering and adding to cart
-                    seen_in_this_batch = set()
-                    for combo, score in candidate_combos:
-                        if len(newly_added) >= n_to_add: break
-                        combo_tuple = tuple(sorted(combo))
-                        if combo_tuple in seen_in_this_batch: continue
+                        cart_number_counts = {n: 0 for n in range(1, 46)}
+                        current_combos_in_cart = st.session_state.cart_items + newly_added
+                        for item in current_combos_in_cart:
+                            for number in item['combo']:
+                                cart_number_counts[number] += 1
+
+                        scored_candidates = []
+                        for combo, score in candidate_combos:
+                            combo_tuple = tuple(sorted(combo))
+                            if combo_tuple in master_seen_combos:
+                                continue
+                            diversity_score = sum(cart_number_counts[n] for n in combo)
+                            scored_candidates.append({'combo': combo, 'ai_score': score, 'diversity_score': diversity_score})
                         
-                        is_valid = True
-                        for item in st.session_state.cart_items:
-                            if len(set(combo) & set(item['combo'])) > max_overlap:
-                                is_valid = False
+                        if scored_candidates:
+                            max_div_score = max(c['diversity_score'] for c in scored_candidates)
+                            min_div_score = min(c['diversity_score'] for c in scored_candidates)
+
+                            for c in scored_candidates:
+                                if max_div_score == min_div_score:
+                                    norm_div_score = 1.0
+                                else:
+                                    norm_div_score = 1 - ((c['diversity_score'] - min_div_score) / (max_div_score - min_div_score))
+                                
+                                norm_ai_score = c['ai_score']
+                                c['final_score'] = (0.5 * norm_ai_score) + (0.5 * norm_div_score)
+
+                            scored_candidates.sort(key=lambda x: x['final_score'], reverse=True)
+
+                        for candidate in scored_candidates:
+                            if len(newly_added) >= n_to_add:
                                 break
-                        
-                        if is_valid and recommender.apply_filters(combo):
-                            newly_added.append({'combo': sorted(combo), 'score': score, 'settings': settings_str})
-                            seen_in_this_batch.add(combo_tuple)
+                            
+                            combo = candidate['combo']
+                            combo_tuple = tuple(sorted(combo))
+                            
+                            if combo_tuple in master_seen_combos:
+                                continue
+
+                            is_valid = True
+                            for item in current_combos_in_cart:
+                                if len(set(combo) & set(item['combo'])) > max_overlap:
+                                    is_valid = False
+                                    break
+                            
+                            if is_valid and recommender.apply_filters(combo):
+                                newly_added.append({
+                                    'combo': sorted(combo),
+                                    'score': candidate['ai_score'],
+                                    'settings': settings_str
+                                })
+                                master_seen_combos.add(combo_tuple)
+                    
+                    if len(newly_added) < n_to_add:
+                        st.warning(f"필터 조건이 매우 엄격하여 요청하신 {n_to_add}개 중 {len(newly_added)}개만 생성할 수 있었습니다. 필터를 완화하거나 재시도해 보세요.")
+
                 
                 st.session_state.cart_items.extend(newly_added)
                 st.success(f"{len(newly_added)}개의 조합을 장바구니에 담았습니다!")
