@@ -427,7 +427,7 @@ def show_ai_smart_combo_tab():
         ai_col1, ai_col2 = st.columns([1, 2])
         with ai_col1:
             st.markdown("#### 🧠 AI 모델 학습 설정")
-            if 'train_end_draw' not in st.session_state: st.session_state.train_end_draw = latest_draw - 20
+            if 'train_end_draw' not in st.session_state: st.session_state.train_end_draw = latest_draw
             if 'train_start_draw' not in st.session_state: st.session_state.train_start_draw = st.session_state.train_end_draw - 300
             st.session_state.train_end_draw = st.number_input("학습 종료 회차", value=st.session_state.train_end_draw, min_value=100, max_value=latest_draw)
             st.session_state.train_start_draw = st.number_input("학습 시작 회차", value=st.session_state.train_start_draw, min_value=1, max_value=st.session_state.train_end_draw - 1)
