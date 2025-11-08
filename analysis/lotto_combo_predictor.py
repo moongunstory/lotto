@@ -124,6 +124,9 @@ class LottoComboPredictor:
         return float(np.clip(score, 0.0, 1.0))
 
     def predict_top_combos(self, feature_engineer, number_probabilities, n=10, candidate_pool='smart', pool_size=25, reference_draw=None):
+        if self.model is None:
+            raise RuntimeError("모델이 학습되지 않았습니다. predict_top_combos를 호출하기 전에 train()을 먼저 실행해야 합니다.")
+
         if reference_draw is None: reference_draw = feature_engineer.get_latest_draw_number() + 1
         # ... (rest of the method is the same)
         candidate_combos = self._generate_candidate_combos(feature_engineer, number_probabilities, candidate_pool, pool_size, n)

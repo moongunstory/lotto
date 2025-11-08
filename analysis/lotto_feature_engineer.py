@@ -12,7 +12,7 @@ class LottoFeatureEngineer:
     """로또 피처 엔지니어링 클래스 (벡터화 최적화)"""
 
     # 피처 구성이 변경될 때마다 버전을 갱신한다.
-    FEATURE_VERSION = "2024.02"
+    FEATURE_VERSION = "2024.03"  # 궁합 피처 추가
     
     def __init__(self, data_path='data/lotto_history.csv'):
         self.data_path = Path(data_path)
@@ -56,6 +56,45 @@ class LottoFeatureEngineer:
         grid['appeared'] = grid['appeared'].fillna(0).astype(int)
         return grid
 
+    def _calculate_pair_features(self, original_df):
+        """번호 조합(궁합) 피처를 생성합니다."""
+        print("   - (추가) 궁합 피처 계산 중...")
+        from itertools import combinations
+        
+        # 모든 회차의 당첨번호 조합을 리스트로 만듦
+        draws = original_df[[f'n{i}' for i in range(1, 7)]].values.tolist()
+
+        # 모든 가능한 2개 번호 조합의 출현 횟수를 계산
+        pair_counts = {}
+        for draw in draws:
+            for pair in combinations(sorted(draw), 2):
+                pair_counts[pair] = pair_counts.get(pair, 0) + 1
+        
+        # 데이터프레임으로 변환
+        pair_df = pd.DataFrame(list(pair_counts.items()), columns=['pair', 'count'])
+        pair_df[['num1', 'num2']] = pd.DataFrame(pair_df['pair'].tolist(), index=pair_df.index)
+
+        # 각 번호별로 가장 궁합이 좋은 번호와 그 횟수를 찾음
+        best_partners = {}
+        all_numbers = range(1, 46)
+        for num in all_numbers:
+            # num이 포함된 모든 조합을 찾음
+            related_pairs = pair_df[(pair_df['num1'] == num) | (pair_df['num2'] == num)]
+            if not related_pairs.empty:
+                # 가장 많이 나온 조합을 찾음
+                best_pair_row = related_pairs.loc[related_pairs['count'].idxmax()]
+                # 상대방 번호를 찾음
+                partner = best_pair_row['num2'] if best_pair_row['num1'] == num else best_pair_row['num1']
+                count = best_pair_row['count']
+                best_partners[num] = {'best_partner': partner, 'best_partner_count': count}
+            else:
+                best_partners[num] = {'best_partner': 0, 'best_partner_count': 0} # 데이터 없는 경우
+
+        # 최종 데이터프레임 생성
+        partner_df = pd.DataFrame.from_dict(best_partners, orient='index')
+        partner_df.index.name = 'number'
+        return partner_df
+
     def calculate_all_features(self):
         """벡터화 연산을 사용하여 모든 피처를 한 번에 계산"""
         if self.features_df is not None:
@@ -65,59 +104,48 @@ class LottoFeatureEngineer:
         start_time = time.time()
         print("🚀 모든 피처를 새로 계산합니다 (벡터화 방식)... 시간이 소요될 수 있습니다.")
 
+        # --- 기본 피처 계산 ---
         df = self._create_feature_grid()
         df.sort_index(inplace=True)
-
-        # 그룹화 객체 생성
         grouped = df.groupby(level='number')
 
-        # 1. 최근 N회 출현 빈도 (롤링 윈도우 사용)
-        print("   - (1/5) 출현 빈도 계산 중...")
+        print("   - (1/6) 출현 빈도 계산 중...")
         windows = [10, 30, 50, 100]
         for w in windows:
-            # shift(1)을 통해 현재 회차를 제외하고 이전 N회차까지의 합을 구함
-            df[f'recent_{w}_freq'] = grouped['appeared'].transform(
-                lambda x: x.shift(1).rolling(window=w, min_periods=1).sum()
-            ).fillna(0)
+            df[f'recent_{w}_freq'] = grouped['appeared'].transform(lambda x: x.shift(1).rolling(w, min_periods=1).sum()).fillna(0)
             df[f'recent_{w}_rate'] = df[f'recent_{w}_freq'] / w
 
-        # 2. 휴면 기간 (Dormant Period) - 수정된 로직
-        print("   - (2/5) 휴면 기간 계산 중...")
+        print("   - (2/6) 휴면 기간 계산 중...")
         appeared_draws = df.index.get_level_values('draw_no').to_series(index=df.index)
         df['last_appeared_draw'] = appeared_draws.where(df['appeared'] == 1)
-        df['last_appeared_draw'] = grouped['last_appeared_draw'].ffill()
-        # Shift the result of the ffill() down by one within each group to prevent data leakage.
-        df['last_appeared_draw'] = grouped['last_appeared_draw'].shift(1)
+        df['last_appeared_draw'] = grouped['last_appeared_draw'].ffill().groupby(level='number').shift(1)
         df['dormant_period'] = (df.index.get_level_values('draw_no') - df['last_appeared_draw']).fillna(999).astype(int)
 
-        # 3. 재출현 간격 통계
-        print("   - (3/5) 재출현 간격 통계 계산 중...")
+        print("   - (3/6) 재출현 간격 통계 계산 중...")
         df['appeared_draw'] = np.where(df['appeared'] == 1, df.index.get_level_values('draw_no'), np.nan)
         df['reappear_gap'] = grouped['appeared_draw'].transform(lambda x: x.diff())
-        
-        gap_windows = [10, 30, 50, 1000] # 1000은 거의 전체 기간을 의미
+        gap_windows = [10, 30, 50, 1000]
         for w in gap_windows:
             df[f'avg_reappear_gap_{w}'] = grouped['reappear_gap'].transform(lambda x: x.shift(1).rolling(w, min_periods=1).mean()).fillna(0)
             df[f'std_reappear_gap_{w}'] = grouped['reappear_gap'].transform(lambda x: x.shift(1).rolling(w, min_periods=1).std()).fillna(0)
             df[f'max_reappear_gap_{w}'] = grouped['reappear_gap'].transform(lambda x: x.shift(1).rolling(w, min_periods=1).max()).fillna(0)
 
-        # 4. 전체 출현율 (Expanding Window 사용)
-        print("   - (4/5) 전체 출현율 및 모멘텀 계산 중...")
-        df['total_appearance_rate'] = grouped['appeared'].transform(
-            lambda x: x.shift(1).expanding(1).mean()
-        ).fillna(0)
-
-        # 5. 출현 모멘텀
+        print("   - (4/6) 전체 출현율 및 모멘텀 계산 중...")
+        df['total_appearance_rate'] = grouped['appeared'].transform(lambda x: x.shift(1).expanding(1).mean()).fillna(0)
         df['momentum'] = (df['recent_10_freq'] * 0.5 + df['recent_30_freq'] * 0.3 + df['recent_50_freq'] * 0.2).fillna(0)
 
-        # 6. 구간별 정보 & 홀짝
+        print("   - (5/6) 기본 속성 피처 계산 중...")
         df_reset = df.reset_index()
         df['range_group'] = pd.cut(df_reset['number'].values, bins=[0, 10, 20, 30, 40, 45], labels=['1-10', '11-20', '21-30', '31-40', '41-45'])
         df['is_odd'] = (df_reset['number'].values % 2).astype(int)
-
-        # 7. 최근 추세
         df['trend_ratio'] = (df['recent_10_freq'] / df['recent_30_freq']).fillna(0).replace(np.inf, 0)
 
+        # --- 궁합 피처 계산 및 병합 ---
+        pair_features_df = self._calculate_pair_features(self.df)
+        
+        # df의 인덱스에 맞게 병합
+        df = df.reset_index().merge(pair_features_df, on='number', how='left').set_index(['draw_no', 'number'])
+        
         # 사용하지 않는 중간 컬럼 제거
         df = df.drop(columns=['last_appeared_draw', 'appeared_draw', 'reappear_gap'])
         
