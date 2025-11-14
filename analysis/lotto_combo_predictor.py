@@ -8,6 +8,7 @@ sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 import pandas as pd
 import numpy as np
 import pickle
+import json
 from pathlib import Path
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import mean_squared_error, r2_score
@@ -68,25 +69,38 @@ class LottoComboPredictor:
         return study.best_params
 
     def train(self, feature_engineer, start_draw=100, end_draw=None, 
-              negative_samples=5, validation_split=0.2,
-              enable_tuning=False, n_trials=50):
+              validation_split=0.2, enable_tuning=False, n_trials=50,
+              use_feedback_training=True): # 신규 파라미터
         """조합 스코어링 모델 학습"""
         print("\n" + "="*60)
         print(f"🎯 조합 예측 모델 학습 시작 ({self.model_type})")
         print("="*60)
         
-        X, y, _ = feature_engineer.build_combo_training_data(
-            start_draw=start_draw, end_draw=end_draw, negative_samples=negative_samples
-        )
+        if use_feedback_training:
+            print("   - 학습 방식: 예측 피드백 활용 (Target: 0-6 맞춘 개수)")
+            X, y, _ = feature_engineer.build_combo_training_data_with_feedback(
+                start_draw=start_draw, end_draw=end_draw
+            )
+        else:
+            print("   - 학습 방식: 구버전 (Target: 0 또는 1)")
+            X, y, _ = feature_engineer.build_combo_training_data(
+                start_draw=start_draw, end_draw=end_draw
+            )
+
         self.feature_names = X.columns.tolist()
         
+        # 데이터가 없는 경우 중단
+        if X.empty:
+            print("⚠️ 학습 데이터가 없어 모델 학습을 중단합니다.")
+            return None
+
         split_idx = int(len(X) * (1 - validation_split))
         X_train, X_val = X.iloc[:split_idx], X.iloc[split_idx:]
         y_train, y_val = y.iloc[:split_idx], y.iloc[split_idx:]
         
         print(f"\n📊 데이터 분할:")
-        print(f"   - 학습: {len(X_train)}개 (당첨: {y_train.sum()}개)")
-        print(f"   - 검증: {len(X_val)}개 (당첨: {y_val.sum()}개)")
+        print(f"   - 학습: {len(X_train)}개 (Target 평균: {y_train.mean():.2f})")
+        print(f"   - 검증: {len(X_val)}개 (Target 평균: {y_val.mean():.2f})")
         
         X_train_scaled = self.scaler.fit_transform(X_train)
         X_val_scaled = self.scaler.transform(X_val)
@@ -111,26 +125,39 @@ class LottoComboPredictor:
         self.feature_version = feature_engineer.get_feature_version()
         return {'val_mse': val_mse, 'val_r2': val_r2}
 
-    def score_combination(self, feature_engineer, numbers, reference_draw=None):
+    def score_combination(self, feature_engineer, numbers, reference_draw=None, settings=None):
         if self.model is None: raise RuntimeError("모델이 학습되지 않았습니다.")
-        # ... (rest of the method is the same)
+        
         if reference_draw is None: reference_draw = feature_engineer.get_latest_draw_number() + 1
+        
         if self.feature_version and self.feature_version != feature_engineer.get_feature_version():
-            raise ValueError("학습된 조합 모델의 피처 버전이 현재 데이터 스키마와 다릅니다.")
-        features = feature_engineer.extract_combo_features(numbers, reference_draw)
+            raise ValueError(f"학습된 조합 모델의 피처 버전({self.feature_version})이 현재 데이터 스키마({feature_engineer.get_feature_version()})와 다릅니다. 모델을 재학습시켜주세요.")
+
+        # 예측 시점의 설정을 피처로 변환
+        settings_features = feature_engineer._extract_settings_features(json.dumps(settings) if settings else '{}')
+        
+        features = feature_engineer.extract_combo_features(numbers, reference_draw, settings_features)
+        
+        # 학습 시 사용된 피처 순서에 맞게 DataFrame 생성
         X = pd.DataFrame([features])[self.feature_names]
         X_scaled = self.scaler.transform(X)
+        
         score = self.model.predict(X_scaled)[0]
-        return float(np.clip(score, 0.0, 1.0))
+        
+        # 예측된 점수(맞춘 개수)를 0과 6 사이로 클리핑
+        return float(np.clip(score, 0.0, 6.0))
 
-    def predict_top_combos(self, feature_engineer, number_probabilities, n=10, candidate_pool='smart', pool_size=25, reference_draw=None):
+    def predict_top_combos(self, feature_engineer, number_probabilities, n=10, candidate_pool='smart', pool_size=25, reference_draw=None, settings=None):
         if self.model is None:
             raise RuntimeError("모델이 학습되지 않았습니다. predict_top_combos를 호출하기 전에 train()을 먼저 실행해야 합니다.")
 
         if reference_draw is None: reference_draw = feature_engineer.get_latest_draw_number() + 1
-        # ... (rest of the method is the same)
+        
         candidate_combos = self._generate_candidate_combos(feature_engineer, number_probabilities, candidate_pool, pool_size, n)
-        scored_combos = [(combo, self.score_combination(feature_engineer, combo, reference_draw)) for combo in candidate_combos]
+        
+        # 각 후보 조합에 대해 점수 계산 (현재 설정을 전달)
+        scored_combos = [(combo, self.score_combination(feature_engineer, combo, reference_draw, settings)) for combo in candidate_combos]
+        
         scored_combos.sort(key=lambda x: x[1], reverse=True)
         return scored_combos[:n]
 
@@ -195,7 +222,8 @@ class LottoComboPredictor:
         self.model_type = save_data.get('model_type', 'lightgbm')
         self.feature_version = save_data.get('feature_version')
         if expected_feature_version and self.feature_version != expected_feature_version:
-            raise ValueError(f"저장된 조합 모델 피처 버전({self.feature_version})과 현재 버전({expected_feature_version})이 다릅니다.")
+            # 버전이 다른 경우 경고만 하고 로드는 허용. 단, 예측 시 에러 발생 가능.
+            print(f"⚠️ 경고: 저장된 조합 모델 피처 버전({self.feature_version})과 현재 버전({expected_feature_version})이 다릅니다. 모델 재학습을 권장합니다.")
         print(f"✅ 모델 로드 완료: {path} (모델 타입: {self.model_type})")
 
 # (Other methods omitted for brevity)
