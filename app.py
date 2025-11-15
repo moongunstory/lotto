@@ -208,7 +208,7 @@ def load_data():
         return False
 
 
-def _run_training_and_generation_cycle(engineer, number_predictor, combo_predictor, start_draw, end_draw, n_trials, use_feedback, settings, num_to_generate, existing_combos):
+def _run_training_and_generation_cycle(recommender, engineer, number_predictor, combo_predictor, start_draw, end_draw, n_trials, use_feedback, settings, num_to_generate, existing_combos):
     """Helper function to run a full train-predict-generate cycle."""
     
     # Train Number Predictor
@@ -233,7 +233,7 @@ def _run_training_and_generation_cycle(engineer, number_predictor, combo_predict
             raw_combos = combo_predictor.predict_top_combos(
                 feature_engineer=engineer,
                 number_probabilities=probabilities,
-                n=num_to_generate * 10, # Generate more to ensure enough valid ones
+                n=num_to_generate * 20, # Generate more to ensure enough valid ones after filtering
                 candidate_pool='smart',
                 settings=cycle_settings
             )
@@ -244,6 +244,10 @@ def _run_training_and_generation_cycle(engineer, number_predictor, combo_predict
             for combo, score in raw_combos:
                 if len(newly_added) >= num_to_generate:
                     break
+
+                # [FIX] Apply the recommender's filters to the generated combination
+                if not recommender.apply_filters(combo):
+                    continue
                 
                 combo_tuple = tuple(sorted(combo))
                 if combo_tuple in master_seen_combos:
@@ -305,7 +309,7 @@ def run_one_click_recommendation():
     end_draw_1 = latest_draw
     
     group1_combos = _run_training_and_generation_cycle(
-        engineer, number_predictor, combo_predictor,
+        recommender, engineer, number_predictor, combo_predictor,
         start_draw=start_draw_1, end_draw=end_draw_1,
         n_trials=500, use_feedback=True,
         settings=base_settings,
@@ -321,7 +325,7 @@ def run_one_click_recommendation():
     end_draw_2 = latest_draw
 
     group2_combos = _run_training_and_generation_cycle(
-        engineer, number_predictor, combo_predictor,
+        recommender, engineer, number_predictor, combo_predictor,
         start_draw=start_draw_2, end_draw=end_draw_2,
         n_trials=500, use_feedback=True,
         settings=base_settings,
